@@ -20,7 +20,7 @@ targets:
     sources:
       - path: Sources
     resources:
-      - path: Resources
+      - path: Resources/Assets.xcassets
     info:
       path: Resources/Info.plist
       properties:
@@ -42,6 +42,7 @@ targets:
     dependencies:
       - framework: Vendor/SpotifyiOS.xcframework
         embed: true
+        codeSign: false
       - sdk: sqlite3.tbd
       - sdk: Accelerate.framework
       - sdk: AuthenticationServices.framework
@@ -51,6 +52,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.personal.linerios
         OTHER_LDFLAGS: "-ObjC"
         SWIFT_OBJC_BRIDGING_HEADER: "Sources/Bridge/LineriOS-Bridging-Header.h"
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/**"
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/**"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: YES
+        AD_HOC_CODE_SIGNING_ALLOWED: YES
 
   LineriOSUnitTests:
     type: bundle.unit-test

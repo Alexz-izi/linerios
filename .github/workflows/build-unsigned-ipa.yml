@@ -58,8 +58,9 @@ jobs:
             -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
             CODE_SIGNING_ALLOWED=NO || echo "Simulator test skipped or exited with status $?"
 
-      - name: Compile Unsigned Release .app for iPhone 14 Pro (arm64)
+      - name: Compile Release .app for iPhone 14 Pro (arm64)
         run: |
+          set -o pipefail
           xcodebuild build \
             -project LineriOS.xcodeproj \
             -scheme LineriOS \
@@ -68,10 +69,17 @@ jobs:
             -derivedDataPath build \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            CODE_SIGNING_ALLOWED=YES \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES 2>&1 | tee xcodebuild.log
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-failure-log
+          path: xcodebuild.log
 
       - name: Package Unsigned .ipa Bundle
         run: |
