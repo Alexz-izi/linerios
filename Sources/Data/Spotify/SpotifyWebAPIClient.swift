@@ -202,6 +202,11 @@ public actor SpotifyWebAPIClient {
         _ = try await performRequest(endpoint: "me/tracks?ids=\(id)", method: "DELETE")
     }
 
+    public func removeTrackFromLibrary(trackURI: String) async throws {
+        let id = trackURI.replacingOccurrences(of: "spotify:track:", with: "")
+        try await removeTrack(id: id)
+    }
+
     public func checkSavedState(id: String) async throws -> Bool {
         guard try canMakeRequest() else { return false }
         let data = try await performRequest(endpoint: "me/tracks/contains?ids=\(id)", method: "GET")
