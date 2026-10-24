@@ -9,10 +9,23 @@
 import Foundation
 import SQLite3
 
+private final class SQLiteConnectionBox: @unchecked Sendable {
+    var pointer: OpaquePointer?
+    init(_ pointer: OpaquePointer?) {
+        self.pointer = pointer
+    }
+    deinit {
+        if let ptr = pointer {
+            sqlite3_close(ptr)
+        }
+    }
+}
+
 public actor SQLiteCacheActor {
     public static let shared = SQLiteCacheActor()
 
-    private var db: OpaquePointer?
+    private let connectionBox: SQLiteConnectionBox
+    private var db: OpaquePointer? { connectionBox.pointer }
     private let dbURL: URL
 
     public struct CacheStatistics: Sendable {
@@ -40,20 +53,14 @@ public actor SQLiteCacheActor {
         var dbPointer: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         if sqlite3_open_v2(url.path, &dbPointer, flags, nil) == SQLITE_OK {
-            self.db = dbPointer
+            self.connectionBox = SQLiteConnectionBox(dbPointer)
             Self.executeRaw(db: dbPointer, sql: "PRAGMA journal_mode = WAL;")
             Self.executeRaw(db: dbPointer, sql: "PRAGMA synchronous = NORMAL;")
             Self.executeRaw(db: dbPointer, sql: "PRAGMA foreign_keys = ON;")
             Self.createTables(db: dbPointer)
         } else {
-            self.db = nil
+            self.connectionBox = SQLiteConnectionBox(nil)
             RingBufferLogger.shared.log(level: .error, category: "SQLite", message: "Failed to open database at \(url.path)")
-        }
-    }
-
-    deinit {
-        if let db = db {
-            sqlite3_close(db)
         }
     }
 

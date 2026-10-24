@@ -180,8 +180,4 @@ public final class ClockInterpolator: ObservableObject {
             }
         }
     }
-
-    deinit {
-        displayLink?.invalidate()
-    }
 }
