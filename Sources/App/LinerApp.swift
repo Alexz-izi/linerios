@@ -82,7 +82,7 @@ struct RootLifecycleStageView: View {
             .ignoresSafeArea()
             
             // Floating Liquid Glass Dock (MiniPlayer + Floating Glass Tab Bar)
-            VStack(spacing: 10) {
+            VStack(spacing: 6) {
                 // Persistent Liquid Glass Mini Player (Screen S8)
                 if playerStore.currentSnapshot != nil {
                     LiquidGlassMiniPlayer {
@@ -93,8 +93,8 @@ struct RootLifecycleStageView: View {
                 
                 // Custom Floating Liquid Glass Navigation Capsule
                 customGlassTabBar
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
+                    .padding(.horizontal, 36)
+                    .padding(.bottom, 8)
             }
             
             // Developer Telemetry HUD (Screen S11)
@@ -113,14 +113,14 @@ struct RootLifecycleStageView: View {
     // MARK: - Custom Floating Liquid Glass Tab Bar
     
     private var customGlassTabBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             tabItem(title: "Home", systemImage: "house.fill", tag: 0)
             tabItem(title: "Search", systemImage: "magnifyingglass", tag: 1)
             tabItem(title: "Library", systemImage: "books.vertical.fill", tag: 2)
             tabItem(title: "Settings", systemImage: "gearshape.fill", tag: 3)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
         .background {
             Capsule()
                 .fill(.ultraThinMaterial)
@@ -151,18 +151,18 @@ struct RootLifecycleStageView: View {
                 env.selectedTab = tag
             }
         } label: {
-            VStack(spacing: 3) {
+            VStack(spacing: 2) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 19, weight: isSelected ? .bold : .medium))
+                    .font(.system(size: 16, weight: isSelected ? .bold : .medium))
                     .foregroundStyle(isSelected ? theme.activeAccent : Color.white.opacity(0.45))
-                    .frame(height: 22)
+                    .frame(height: 18)
                 
                 Text(title)
-                    .font(.system(size: 10, weight: isSelected ? .bold : .medium, design: .rounded))
+                    .font(.system(size: 9, weight: isSelected ? .bold : .medium, design: .rounded))
                     .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.45))
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
+            .padding(.vertical, 4)
             .background {
                 if isSelected {
                     Capsule()

@@ -260,6 +260,28 @@ public actor SpotifyWebAPIClient {
         }
     }
 
+    // MARK: - Single Track Details (Artwork & Metadata Resolution)
+
+    public func getTrack(id: String) async throws -> TrackItem? {
+        guard try canMakeRequest() else { return nil }
+        let endpoint = "tracks/\(id)"
+        let data = try await performRequest(endpoint: endpoint, method: "GET")
+
+        let track = try JSONDecoder().decode(WebTrack.self, from: data)
+        let artworkURL = parseURL(track.album?.images?.first?.url)
+        return TrackItem(
+            id: track.id,
+            uri: track.uri,
+            title: track.name,
+            artistName: track.artists?.map(\.name).joined(separator: ", ") ?? "Unknown Artist",
+            albumName: track.album?.name ?? "Unknown Album",
+            artworkURL: artworkURL,
+            durationMs: track.durationMs,
+            isExplicit: track.explicit ?? false,
+            isSaved: false
+        )
+    }
+
     // MARK: - Core HTTP Request Engine
 
     private func performRequest(endpoint: String, method: String, body: Data? = nil) async throws -> Data {

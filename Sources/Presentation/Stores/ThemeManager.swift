@@ -14,7 +14,7 @@ import Observation
 public final class ThemeManager {
     public static let shared = ThemeManager()
 
-    public var currentPreset: ThemePreset = .midnight {
+    public var currentPreset: ThemePreset = .goth {
         didSet {
             UserDefaults.standard.set(currentPreset.rawValue, forKey: "liner_selected_theme")
         }

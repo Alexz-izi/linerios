@@ -369,12 +369,18 @@ extension SpotifyAppRemoteAdapter: SPTAppRemotePlayerStateDelegate {
         }
 
         Task { @MainActor in
+            // Preserve existing artwork URL if already resolved for this track
+            var resolvedArtworkURL: URL? = nil
+            if self.currentSnapshot?.trackURI == trackUri {
+                resolvedArtworkURL = self.currentSnapshot?.artworkURL
+            }
+
             let snapshot = PlaybackSnapshot(
                 trackURI: trackUri,
                 title: trackName,
                 artist: artistName,
                 album: albumName,
-                artworkURL: nil,
+                artworkURL: resolvedArtworkURL,
                 durationMs: Int(duration),
                 anchorPositionMs: playbackPos,
                 anchorMonotonicTime: now,
@@ -387,7 +393,71 @@ extension SpotifyAppRemoteAdapter: SPTAppRemotePlayerStateDelegate {
             self.currentSnapshot = snapshot
             self.lastObservedURI = trackUri
             self.onSnapshotUpdate?(snapshot)
+
+            // If artwork is not resolved yet, fetch immediately via Image API and Web API
+            if resolvedArtworkURL == nil {
+                self.fetchArtwork(for: track, uri: trackUri)
+            }
         }
+    }
+
+    private func fetchArtwork(for track: SPTAppRemoteTrack, uri: String) {
+        // Attempt 1: Fast local image fetch via SPTAppRemoteImageAPI (<10ms)
+        if let appRemote = self.appRemote, let imageAPI = appRemote.imageAPI {
+            imageAPI.fetchImage(forItem: track, size: CGSize(width: 640, height: 640)) { [weak self] image, error in
+                guard let self = self else { return }
+                if let uiImage = image as? UIImage,
+                   let data = uiImage.jpegData(compressionQuality: 0.90) {
+                    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("art_\(abs(uri.hashValue)).jpg")
+                    try? data.write(to: fileURL)
+                    Task { @MainActor in
+                        if self.currentSnapshot?.trackURI == uri {
+                            self.updateSnapshotArtwork(fileURL)
+                        }
+                    }
+                    return
+                }
+                // Fallback to Web API if ImageAPI returns nil
+                self.fetchArtworkFromWebAPI(uri: uri)
+            }
+        } else {
+            fetchArtworkFromWebAPI(uri: uri)
+        }
+    }
+
+    private func fetchArtworkFromWebAPI(uri: String) {
+        let trackId = uri.replacingOccurrences(of: "spotify:track:", with: "")
+        Task {
+            if let trackItem = try? await SpotifyWebAPIClient.shared.getTrack(id: trackId),
+               let url = trackItem.artworkURL {
+                await MainActor.run {
+                    if self.currentSnapshot?.trackURI == uri {
+                        self.updateSnapshotArtwork(url)
+                    }
+                }
+            }
+        }
+    }
+
+    private func updateSnapshotArtwork(_ url: URL) {
+        guard let snap = self.currentSnapshot else { return }
+        let updated = PlaybackSnapshot(
+            trackURI: snap.trackURI,
+            title: snap.title,
+            artist: snap.artist,
+            album: snap.album,
+            artworkURL: url,
+            durationMs: snap.durationMs,
+            anchorPositionMs: snap.anchorPositionMs,
+            anchorMonotonicTime: snap.anchorMonotonicTime,
+            isPlaying: snap.isPlaying,
+            shuffleEnabled: snap.shuffleEnabled,
+            repeatMode: snap.repeatMode,
+            activeDeviceName: snap.activeDeviceName
+        )
+        self.currentSnapshot = updated
+        self.onSnapshotUpdate?(updated)
+        ThemeManager.shared.updateArtwork(url: url)
     }
 }
 

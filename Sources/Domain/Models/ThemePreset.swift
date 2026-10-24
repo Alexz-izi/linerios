@@ -8,15 +8,17 @@
 import SwiftUI
 
 public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
-    case midnight   // Default
-    case obsidian   // True OLED (#000000)
-    case aurora     // Nordic Mesh
-    case afterhours // Warm Synth
+    case goth       // Default: Stark Black & White Goth
+    case midnight   // Deep Navy / Sky Cyan
+    case obsidian   // Pure OLED Stealth
+    case aurora     // Nordic Emerald
+    case afterhours // Warm Synth Rose
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
+        case .goth:       return "Goth (B&W)"
         case .midnight:   return "Midnight"
         case .obsidian:   return "Obsidian"
         case .aurora:     return "Aurora"
@@ -28,6 +30,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var bgPrimary: Color {
         switch self {
+        case .goth:       return Color(hex: "#000000")
         case .midnight:   return Color(hex: "#070913")
         case .obsidian:   return Color(hex: "#000000")
         case .aurora:     return Color(hex: "#06110E")
@@ -37,6 +40,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var bgSecondary: Color {
         switch self {
+        case .goth:       return Color(hex: "#0A0A0A")
         case .midnight:   return Color(hex: "#0F1428")
         case .obsidian:   return Color(hex: "#0A0A0C")
         case .aurora:     return Color(hex: "#0D211B")
@@ -46,6 +50,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var glassTintColor: Color {
         switch self {
+        case .goth:       return Color(hex: "#FFFFFF").opacity(0.06)
         case .midnight:   return Color(hex: "#1E2952").opacity(0.24)
         case .obsidian:   return Color(hex: "#FFFFFF").opacity(0.08)
         case .aurora:     return Color(hex: "#10B981").opacity(0.18)
@@ -55,6 +60,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var specularRimColor: Color {
         switch self {
+        case .goth:       return Color(hex: "#FFFFFF").opacity(0.35)
         case .midnight:   return Color(hex: "#7DD3FC").opacity(0.32)
         case .obsidian:   return Color(hex: "#E2E8F0").opacity(0.40)
         case .aurora:     return Color(hex: "#6EE7B7").opacity(0.35)
@@ -64,6 +70,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var accentPrimary: Color {
         switch self {
+        case .goth:       return Color(hex: "#FFFFFF") // Stark White
         case .midnight:   return Color(hex: "#38BDF8") // Sky Cyan
         case .obsidian:   return Color(hex: "#F8FAFC") // Crisp Silver
         case .aurora:     return Color(hex: "#34D399") // Emerald
@@ -75,6 +82,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var meshNode2: Color {
         switch self {
+        case .goth:       return Color(hex: "#161616") // Deep Charcoal
         case .midnight:   return Color(hex: "#4F46E5") // Indigo
         case .obsidian:   return Color(hex: "#18181B") // Zinc Dark
         case .aurora:     return Color(hex: "#8B5CF6") // Violet
@@ -84,6 +92,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var textPrimary: Color {
         switch self {
+        case .goth:       return Color(hex: "#FFFFFF")
         case .midnight:   return Color(hex: "#F8FAFC")
         case .obsidian:   return Color(hex: "#FFFFFF")
         case .aurora:     return Color(hex: "#ECFDF5")
@@ -93,6 +102,7 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
 
     public var textMuted: Color {
         switch self {
+        case .goth:       return Color(hex: "#888888")
         case .midnight:   return Color(hex: "#94A3B8").opacity(0.34)
         case .obsidian:   return Color(hex: "#71717A").opacity(0.36)
         case .aurora:     return Color(hex: "#6EE7B7").opacity(0.32)

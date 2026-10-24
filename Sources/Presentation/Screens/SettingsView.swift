@@ -13,6 +13,7 @@ public struct SettingsView: View {
     @Bindable private var themeManager = ThemeManager.shared
     @Bindable private var playerStore = PlayerStore.shared
     @Bindable private var lyricsStore = LyricsStore.shared
+    @Environment(\.dismiss) private var dismiss
     
     @State private var showingCustomizer = false
     @State private var showingExportSheet = false
@@ -57,6 +58,22 @@ public struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "chevron.backward")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(themeManager.textPrimary)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(themeManager.textMuted)
+                    }
+                }
+            }
             .sheet(isPresented: $showingCustomizer) {
                 ThemeCustomizerView()
             }
