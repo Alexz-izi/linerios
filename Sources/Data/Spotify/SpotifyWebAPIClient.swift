@@ -126,6 +126,10 @@ public actor SpotifyWebAPIClient {
 
     // MARK: - Search (Dev Mode limit=10)
 
+    public func search(query: String, offset: Int = 0) async throws -> [TrackItem] {
+        try await searchTracks(query: query, offset: offset)
+    }
+
     public func searchTracks(query: String, offset: Int = 0) async throws -> [TrackItem] {
         guard try canMakeRequest() else { return [] }
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
@@ -186,6 +190,11 @@ public actor SpotifyWebAPIClient {
         guard try canMakeRequest() else { return }
         // 2026 Dev Mode supports PUT /v1/me/library or PUT /v1/me/tracks
         _ = try await performRequest(endpoint: "me/tracks?ids=\(id)", method: "PUT")
+    }
+
+    public func saveTrackToLibrary(trackURI: String) async throws {
+        let id = trackURI.replacingOccurrences(of: "spotify:track:", with: "")
+        try await saveTrack(id: id)
     }
 
     public func removeTrack(id: String) async throws {
