@@ -228,6 +228,17 @@ public struct LibraryView: View {
                     .foregroundColor(theme.textMuted)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 16)
+
+                if let err = libraryStore.errorMessage {
+                    Text(err)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Color(hex: "#EF4444"))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.red.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
             }
 
             HStack(spacing: 10) {

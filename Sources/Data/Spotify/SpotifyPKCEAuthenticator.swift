@@ -32,6 +32,7 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
     ].joined(separator: " ")
 
     private var activeAuthSession: ASWebAuthenticationSession?
+    private var activeContinuation: CheckedContinuation<String, Error>?
     private var pendingCodeVerifier: String?
     private var pendingAuthState: String?
 
@@ -52,6 +53,8 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
 
         self.pendingCodeVerifier = verifier
         self.pendingAuthState = state
+        UserDefaults.standard.set(verifier, forKey: "liner_pkce_verifier")
+        UserDefaults.standard.set(state, forKey: "liner_pkce_state")
 
         var components = URLComponents(url: authorizeEndpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -69,26 +72,25 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
         }
 
         return try await withCheckedThrowingContinuation { continuation in
+            self.activeContinuation = continuation
+
             let session = ASWebAuthenticationSession(
                 url: authURL,
                 callbackURLScheme: Self.callbackScheme
             ) { callbackURL, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-
-                guard let callbackURL = callbackURL else {
-                    continuation.resume(throwing: AuthError.missingCallbackURL)
-                    return
-                }
-
                 Task { @MainActor in
-                    do {
-                        let token = try await self.exchangeCodeForToken(callbackURL: callbackURL)
-                        continuation.resume(returning: token)
-                    } catch {
-                        continuation.resume(throwing: error)
+                    if let callbackURL = callbackURL {
+                        do {
+                            let token = try await self.exchangeCodeForToken(callbackURL: callbackURL)
+                            self.resumeContinuation(returning: token)
+                            await LibraryStore.shared.loadLibrary()
+                            await PlayerStore.shared.connect()
+                        } catch {
+                            self.resumeContinuation(throwing: error)
+                        }
+                    } else if let error = error {
+                        // If deep link already handled and resumed continuation, ignore session cancel
+                        self.resumeContinuation(throwing: error)
                     }
                 }
             }
@@ -101,9 +103,39 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
     }
 
     public func handleCallbackURL(_ url: URL) {
-        // Fallback for custom URL scheme deep links (linerios://auth-callback?code=...)
-        Task {
-            _ = try? await exchangeCodeForToken(callbackURL: url)
+        // Handle custom URL scheme redirect from Spotify native app (linerios://auth-callback?code=...)
+        Task { @MainActor in
+            do {
+                let token = try await exchangeCodeForToken(callbackURL: url)
+                RingBufferLogger.shared.log(level: .info, category: "Auth", message: "Deep-link PKCE token exchange successful")
+                self.activeAuthSession?.cancel()
+                self.activeAuthSession = nil
+                self.resumeContinuation(returning: token)
+
+                // Update App Remote token reference
+                SpotifyAppRemoteAdapter.shared.appRemote?.connectionParameters.accessToken = token
+
+                // Refresh library and connect player
+                await LibraryStore.shared.loadLibrary()
+                await PlayerStore.shared.connect()
+            } catch {
+                RingBufferLogger.shared.log(level: .error, category: "Auth", message: "Deep-link PKCE exchange failed: \(error.localizedDescription)")
+                self.resumeContinuation(throwing: error)
+            }
+        }
+    }
+
+    private func resumeContinuation(returning token: String) {
+        if let cont = self.activeContinuation {
+            self.activeContinuation = nil
+            cont.resume(returning: token)
+        }
+    }
+
+    private func resumeContinuation(throwing error: Error) {
+        if let cont = self.activeContinuation {
+            self.activeContinuation = nil
+            cont.resume(throwing: error)
         }
     }
 
@@ -124,11 +156,12 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
         }
 
         let returnedState = queryItems.first(where: { $0.name == "state" })?.value
-        guard returnedState == self.pendingAuthState else {
+        let expectedState = self.pendingAuthState ?? UserDefaults.standard.string(forKey: "liner_pkce_state")
+        guard returnedState == expectedState else {
             throw AuthError.stateMismatch
         }
 
-        guard let verifier = self.pendingCodeVerifier else {
+        guard let verifier = self.pendingCodeVerifier ?? UserDefaults.standard.string(forKey: "liner_pkce_verifier") else {
             throw AuthError.missingCodeVerifier
         }
 
@@ -141,6 +174,12 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
             codeVerifier: verifier,
             clientId: clientId
         )
+
+        // Clear one-time verifier
+        UserDefaults.standard.removeObject(forKey: "liner_pkce_verifier")
+        UserDefaults.standard.removeObject(forKey: "liner_pkce_state")
+        self.pendingCodeVerifier = nil
+        self.pendingAuthState = nil
 
         saveTokens(response: tokens)
         RingBufferLogger.shared.log(level: .info, category: "Auth", message: "OAuth PKCE token exchange successful")
@@ -275,9 +314,11 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
     }
 
     private func formatURLEncodedBody(_ parameters: [String: String]) -> Data? {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._*")
         let pairs = parameters.map { key, value in
-            let escapedKey = key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? key
-            let escapedValue = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+            let escapedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+            let escapedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
             return "\(escapedKey)=\(escapedValue)"
         }
         return pairs.joined(separator: "&").data(using: .utf8)
