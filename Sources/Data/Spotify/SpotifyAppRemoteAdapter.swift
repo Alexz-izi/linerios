@@ -404,7 +404,7 @@ extension SpotifyAppRemoteAdapter: SPTAppRemotePlayerStateDelegate {
     private func fetchArtwork(for track: SPTAppRemoteTrack, uri: String) {
         // Attempt 1: Fast local image fetch via SPTAppRemoteImageAPI (<10ms)
         if let appRemote = self.appRemote, let imageAPI = appRemote.imageAPI {
-            imageAPI.fetchImage(forItem: track, withSize: CGSize(width: 640, height: 640), callback: { [weak self] (image: Any?, error: Error?) in
+            imageAPI.fetchImage(forItem: track, with: CGSize(width: 640, height: 640), callback: { [weak self] (image: Any?, error: Error?) in
                 guard let self = self else { return }
                 if let uiImage = image as? UIImage,
                    let data = uiImage.jpegData(compressionQuality: 0.90) {
