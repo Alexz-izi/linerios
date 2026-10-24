@@ -224,6 +224,7 @@ public struct ThemeCustomizerView: View {
     
     private func presetSubtitle(for preset: ThemePreset) -> String {
         switch preset {
+        case .goth: return "Pure black & stark white gothic"
         case .midnight: return "Deep cyan & dark indigo"
         case .obsidian: return "Monochrome & silver"
         case .aurora: return "Emerald & violet wash"
