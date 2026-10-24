@@ -394,38 +394,14 @@ extension SpotifyAppRemoteAdapter: SPTAppRemotePlayerStateDelegate {
             self.lastObservedURI = trackUri
             self.onSnapshotUpdate?(snapshot)
 
-            // If artwork is not resolved yet, fetch immediately via Image API and Web API
+            // If artwork is not resolved yet, fetch immediately via Web API
             if resolvedArtworkURL == nil {
-                self.fetchArtwork(for: track, uri: trackUri)
+                self.fetchArtwork(forURI: trackUri)
             }
         }
     }
 
-    private func fetchArtwork(for track: SPTAppRemoteTrack, uri: String) {
-        // Attempt 1: Fast local image fetch via SPTAppRemoteImageAPI (<10ms)
-        if let appRemote = self.appRemote, let imageAPI = appRemote.imageAPI {
-            imageAPI.fetchImage(forItem: track, with: CGSize(width: 640, height: 640), callback: { [weak self] (image: Any?, error: Error?) in
-                guard let self = self else { return }
-                if let uiImage = image as? UIImage,
-                   let data = uiImage.jpegData(compressionQuality: 0.90) {
-                    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("art_\(abs(uri.hashValue)).jpg")
-                    try? data.write(to: fileURL)
-                    Task { @MainActor in
-                        if self.currentSnapshot?.trackURI == uri {
-                            self.updateSnapshotArtwork(fileURL)
-                        }
-                    }
-                    return
-                }
-                // Fallback to Web API if ImageAPI returns nil
-                self.fetchArtworkFromWebAPI(uri: uri)
-            })
-        } else {
-            fetchArtworkFromWebAPI(uri: uri)
-        }
-    }
-
-    private func fetchArtworkFromWebAPI(uri: String) {
+    private func fetchArtwork(forURI uri: String) {
         let trackId = uri.replacingOccurrences(of: "spotify:track:", with: "")
         Task {
             if let trackItem = try? await SpotifyWebAPIClient.shared.getTrack(id: trackId),
