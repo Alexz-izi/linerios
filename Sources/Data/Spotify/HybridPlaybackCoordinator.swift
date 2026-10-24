@@ -88,10 +88,20 @@ public final class HybridPlaybackCoordinator: PlaybackControllerProtocol {
         }
 
         // Cloud Web API Fallback
-        if let uri = uri, !uri.isEmpty {
-            try await webApiClient.play(uri: uri)
-        } else {
-            try await webApiClient.resume()
+        do {
+            if let uri = uri, !uri.isEmpty {
+                try await webApiClient.play(uri: uri)
+            } else {
+                try await webApiClient.resume()
+            }
+        } catch {
+            RingBufferLogger.shared.log(
+                level: .warn,
+                category: "Coordinator",
+                message: "Web API play failed (\(error.localizedDescription)). Invoking Stage 3 Spotify app wake."
+            )
+            // Stage 3: Direct Spotify App Wake-Up Fallback
+            await wakeAndPlay(uri: uri)
         }
     }
 
@@ -178,6 +188,33 @@ public final class HybridPlaybackCoordinator: PlaybackControllerProtocol {
         }
     }
 
+    public func wakeAndPlay(uri: String?) async {
+        let targetURL: URL?
+        if let uri = uri, !uri.isEmpty {
+            targetURL = URL(string: uri)
+        } else {
+            targetURL = URL(string: "spotify:play") ?? URL(string: "spotify://")
+        }
+
+        guard let url = targetURL else { return }
+
+        await MainActor.run {
+            UIApplication.shared.open(url, options: [:]) { [weak self] success in
+                if success {
+                    RingBufferLogger.shared.log(
+                        level: .info,
+                        category: "Coordinator",
+                        message: "Opened Spotify via URL scheme: \(url)"
+                    )
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(900))
+                        try? await self?.connect()
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Bindings & Internal Synchronization
 
     private func bindAppRemote() {
@@ -213,7 +250,24 @@ public final class HybridPlaybackCoordinator: PlaybackControllerProtocol {
     private func startCloudPolling() {
         stopCloudPolling()
         pollingTask = Task { [weak self] in
+            // Immediate first check
+            if let self = self {
+                if let snapshot = try? await self.webApiClient.getCurrentPlaybackState() {
+                    await MainActor.run {
+                        self.currentSnapshot = snapshot
+                        self.onSnapshotUpdate?(snapshot)
+                        self.clock.updateAnchor(
+                            positionMs: snapshot.anchorPositionMs,
+                            monotonicTime: snapshot.anchorMonotonicTime,
+                            isPlaying: snapshot.isPlaying
+                        )
+                    }
+                }
+            }
+
             while !Task.isCancelled {
+                // Poll every 3 seconds while in Cloud Connect fallback mode
+                try? await Task.sleep(for: .seconds(3))
                 guard let self = self else { break }
                 do {
                     if let snapshot = try await self.webApiClient.getCurrentPlaybackState() {
@@ -235,9 +289,6 @@ public final class HybridPlaybackCoordinator: PlaybackControllerProtocol {
                         try? await Task.sleep(for: .seconds(retryAfter))
                     }
                 }
-
-                // Poll every 3 seconds while in Cloud Connect fallback mode
-                try? await Task.sleep(for: .seconds(3))
             }
         }
     }

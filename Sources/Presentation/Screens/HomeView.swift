@@ -15,7 +15,6 @@ public struct HomeView: View {
 
     @State private var recentTracks: [TrackItem] = []
     @State private var showSettings: Bool = false
-    @State private var showFullPlayer: Bool = false
 
     public init() {}
 
@@ -30,39 +29,31 @@ public struct HomeView: View {
                         topBarHeader
                             .padding(.top, 59) // Dynamic Island inset
 
-                        // Section 1: Jump Back In Grid
+                        // Section 1: Jump Back In Grid / Standby Wake Card
                         jumpBackInSection
 
-                        // Section 2: Recently Played Carousel
-                        recentlyPlayedSection
+                        // Section 2: Recently Played Carousel (if tracks present)
+                        if !recentTracks.isEmpty {
+                            recentlyPlayedSection
+                        }
 
-                        // Section 3: Quick Saved Tracks
-                        quickSavedSection
+                        // Section 3: Quick Saved Tracks (if tracks present)
+                        if !libraryStore.savedTracks.isEmpty {
+                            quickSavedSection
+                        }
 
-                        // Bottom Spacer for MiniPlayer
-                        Color.clear.frame(height: 100)
+                        // Bottom Spacer for Floating Dock
+                        Color.clear.frame(height: 140)
                     }
                     .padding(.horizontal, 20)
                 }
                 .refreshable {
                     await loadHomeData()
                 }
-
-                // Docked Mini-Player (S8)
-                VStack {
-                    Spacer()
-                    LiquidGlassMiniPlayer {
-                        showFullPlayer = true
-                    }
-                    .padding(.bottom, 12)
-                }
             }
             .ignoresSafeArea()
             .sheet(isPresented: $showSettings) {
                 SettingsView()
-            }
-            .fullScreenCover(isPresented: $showFullPlayer) {
-                NowPlayingView()
             }
             .task {
                 await loadHomeData()
@@ -111,49 +102,125 @@ public struct HomeView: View {
         }
     }
 
-    // MARK: - Section 1: Jump Back In (2-column compact grid)
+    // MARK: - Section 1: Jump Back In (2-column compact grid or Standby Card)
     private var jumpBackInSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("JUMP BACK IN")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundColor(theme.textMuted)
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                ForEach(recentTracks.prefix(6)) { track in
-                    Button(action: {
-                        playerStore.playTrack(uri: track.uri)
-                    }) {
-                        HStack(spacing: 10) {
-                            if let url = track.artworkURL {
-                                AsyncImage(url: url) { phase in
-                                    if let img = phase.image {
-                                        img.resizable().aspectRatio(contentMode: .fill)
-                                    } else {
-                                        Color.gray.opacity(0.3)
+            if recentTracks.isEmpty {
+                standbyConnectCard
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    ForEach(recentTracks.prefix(6)) { track in
+                        Button(action: {
+                            playerStore.playTrack(uri: track.uri)
+                        }) {
+                            HStack(spacing: 10) {
+                                if let url = track.artworkURL {
+                                    AsyncImage(url: url) { phase in
+                                        if let img = phase.image {
+                                            img.resizable().aspectRatio(contentMode: .fill)
+                                        } else {
+                                            Color.gray.opacity(0.3)
+                                        }
                                     }
+                                    .frame(width: 52, height: 52)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
                                 }
-                                .frame(width: 52, height: 52)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                                Text(track.title)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundColor(theme.textPrimary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+
+                                Spacer()
                             }
-
-                            Text(track.title)
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundColor(theme.textPrimary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-
-                            Spacer()
+                            .background {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(theme.currentPreset.glassTintColor)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(
+                                        LinearGradient(
+                                            colors: [Color.white.opacity(0.25), Color.clear],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 0.8
+                                    )
+                            )
                         }
-                        .background(theme.currentPreset.glassTintColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(theme.specularRimColor.opacity(0.2), lineWidth: 0.8)
-                        )
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
+        }
+    }
+
+    private var standbyConnectCard: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 40))
+                .foregroundColor(theme.activeAccent)
+
+            VStack(spacing: 4) {
+                Text("Spotify Companion Ready")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(theme.textPrimary)
+
+                Text("Launch Spotify or tap below to wake the audio session and load your personal library.")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.textMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+            }
+
+            Button(action: {
+                HybridPlaybackCoordinator.shared.wakeSpotifyApp()
+                Task {
+                    try? await Task.sleep(for: .milliseconds(800))
+                    await playerStore.connect()
+                    await loadHomeData()
+                }
+            }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.circle.fill")
+                    Text("Wake & Connect Spotify")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                }
+                .foregroundColor(.black)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(theme.activeAccent)
+                .clipShape(Capsule())
+                .shadow(color: theme.activeAccent.opacity(0.35), radius: 12, x: 0, y: 6)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(theme.currentPreset.glassTintColor)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.3), Color.white.opacity(0.05)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.0
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.35), radius: 20, x: 0, y: 10)
         }
     }
 
@@ -259,6 +326,7 @@ public struct HomeView: View {
 
     // MARK: - Data Loading
     private func loadHomeData() async {
+        await playerStore.connect()
         await libraryStore.loadLibrary()
         if recentTracks.isEmpty {
             self.recentTracks = libraryStore.savedTracks

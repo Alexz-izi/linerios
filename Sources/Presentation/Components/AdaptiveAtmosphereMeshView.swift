@@ -2,8 +2,9 @@
 //  AdaptiveAtmosphereMeshView.swift
 //  LineriOS
 //
-//  Dynamic 3x3 MeshGradient ambient atmosphere background driven by vImage LAB palette extraction.
-//  Preserves >= 5.52:1 WCAG AA text contrast while animating color nodes smoothly.
+//  Dynamic 3x3 MeshGradient & Liquid Glass ambient atmosphere background driven by
+//  vImage LAB palette extraction. Features drifting glowing atmospheric orbs to ensure
+//  ultraThinMaterial surfaces refract luminous color depths in any theme.
 //
 
 import SwiftUI
@@ -16,8 +17,50 @@ public struct AdaptiveAtmosphereMeshView: View {
 
     public var body: some View {
         ZStack {
-            theme.currentPreset.bgPrimary.ignoresSafeArea()
+            // Base background fill
+            theme.currentPreset.bgPrimary
+                .ignoresSafeArea()
 
+            // Glowing Ambient Light Orbs (Ensures Liquid Glass materials reflect color)
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let height = proxy.size.height
+
+                ZStack {
+                    // Top-right accent light
+                    Circle()
+                        .fill(theme.activeAccent.opacity(0.28))
+                        .frame(width: width * 0.85, height: width * 0.85)
+                        .position(
+                            x: width * (0.8 + 0.1 * sin(phase * .pi)),
+                            y: height * (0.15 + 0.05 * cos(phase * .pi))
+                        )
+                        .blur(radius: 75)
+
+                    // Mid-left secondary ambient light
+                    Circle()
+                        .fill(theme.currentPreset.meshNode2.opacity(0.32))
+                        .frame(width: width * 0.95, height: width * 0.95)
+                        .position(
+                            x: width * (0.1 - 0.08 * cos(phase * .pi)),
+                            y: height * (0.55 + 0.08 * sin(phase * .pi))
+                        )
+                        .blur(radius: 85)
+
+                    // Bottom-right subtle fill
+                    Circle()
+                        .fill(theme.meshColor1.opacity(0.30))
+                        .frame(width: width * 0.8, height: width * 0.8)
+                        .position(
+                            x: width * (0.7 + 0.06 * cos(phase * .pi)),
+                            y: height * (0.85 - 0.05 * sin(phase * .pi))
+                        )
+                        .blur(radius: 80)
+                }
+            }
+            .ignoresSafeArea()
+
+            // MeshGradient layer for iOS 18+
             if #available(iOS 18.0, *) {
                 MeshGradient(
                     width: 3,
@@ -28,25 +71,37 @@ public struct AdaptiveAtmosphereMeshView: View {
                         SIMD2<Float>(0.0, 1.0), SIMD2<Float>(0.5, 1.0), SIMD2<Float>(1.0, 1.0)
                     ],
                     colors: [
-                        theme.meshColor0, theme.meshColor1, theme.meshColor0,
-                        theme.meshColor1, theme.meshColor2.opacity(0.45), theme.meshColor1,
-                        theme.meshColor0, theme.meshColor3, theme.meshColor0
+                        theme.meshColor0.opacity(0.7), theme.meshColor1.opacity(0.8), theme.meshColor0.opacity(0.7),
+                        theme.meshColor1.opacity(0.7), theme.meshColor2.opacity(0.65), theme.meshColor1.opacity(0.7),
+                        theme.meshColor0.opacity(0.7), theme.meshColor3.opacity(0.8), theme.meshColor0.opacity(0.7)
                     ]
                 )
-                .blur(radius: 50)
+                .blur(radius: 45)
                 .ignoresSafeArea()
             } else {
                 RadialGradient(
-                    colors: [theme.meshColor2.opacity(0.35), theme.meshColor0],
+                    colors: [theme.meshColor2.opacity(0.45), theme.meshColor0.opacity(0.9)],
                     center: .center,
                     startRadius: 20,
                     endRadius: 400
                 )
                 .ignoresSafeArea()
             }
+
+            // Subtle dark vignette to ensure text contrast (>= 5.52:1 WCAG AA)
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.20),
+                    Color.clear,
+                    Color.black.opacity(0.45)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
         }
         .onAppear {
-            withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 7.0).repeatForever(autoreverses: true)) {
                 phase = 1.0
             }
         }

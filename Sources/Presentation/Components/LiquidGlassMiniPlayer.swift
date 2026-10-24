@@ -64,23 +64,28 @@ public struct LiquidGlassMiniPlayer: View {
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(
+            .padding(.vertical, 10)
+            .background {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(theme.currentPreset.glassTintColor)
+                    .fill(.ultraThinMaterial)
+                    .overlay(theme.currentPreset.glassTintColor)
                     .overlay(
                         RoundedRectangle(cornerRadius: 24, style: .continuous)
                             .stroke(
                                 LinearGradient(
-                                    colors: [theme.specularRimColor, theme.specularRimColor.opacity(0.1)],
+                                    colors: [
+                                        Color.white.opacity(0.40),
+                                        Color.white.opacity(0.10),
+                                        theme.specularRimColor.opacity(0.25)
+                                    ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 ),
                                 lineWidth: 1.0
                             )
                     )
-                    .shadow(color: Color.black.opacity(0.35), radius: 20, x: 0, y: 10)
-            )
+                    .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
+            }
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16)

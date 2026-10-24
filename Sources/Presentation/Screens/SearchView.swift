@@ -65,14 +65,22 @@ public struct SearchView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(
+        .background {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(theme.currentPreset.glassTintColor)
+                .fill(.ultraThinMaterial)
+                .overlay(theme.currentPreset.glassTintColor)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(theme.specularRimColor.opacity(0.3), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.35), Color.white.opacity(0.08)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.0
+                        )
                 )
-        )
+        }
     }
 
     // MARK: - Category Filter Bar

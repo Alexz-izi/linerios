@@ -30,6 +30,7 @@ struct RootLifecycleStageView: View {
     @Bindable private var env = AppEnvironment.shared
     @Bindable private var playerStore = PlayerStore.shared
     @Bindable private var theme = ThemeManager.shared
+    @Environment(\.scenePhase) private var scenePhase
     
     var body: some View {
         ZStack {
@@ -39,43 +40,61 @@ struct RootLifecycleStageView: View {
                 WelcomeView()
             }
         }
+        .onAppear {
+            if KeychainStore.shared.hasValidCredentials() {
+                Task {
+                    await playerStore.connect()
+                }
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active && KeychainStore.shared.hasValidCredentials() {
+                Task {
+                    await playerStore.connect()
+                }
+            }
+        }
     }
     
     // MARK: - Authenticated Navigation Shell
     
     private var authenticatedShell: some View {
         ZStack(alignment: .bottom) {
-            // Main Tab View
-            TabView(selection: $env.selectedTab) {
+            // Main Content Stage (State-preserving ZStack without native UITabBar collision)
+            ZStack {
                 HomeView()
-                    .tag(0)
-                
+                    .opacity(env.selectedTab == 0 ? 1 : 0)
+                    .allowsHitTesting(env.selectedTab == 0)
+
                 SearchView()
-                    .tag(1)
-                
+                    .opacity(env.selectedTab == 1 ? 1 : 0)
+                    .allowsHitTesting(env.selectedTab == 1)
+
                 LibraryView()
-                    .tag(2)
-                
+                    .opacity(env.selectedTab == 2 ? 1 : 0)
+                    .allowsHitTesting(env.selectedTab == 2)
+
                 SettingsView()
-                    .tag(3)
+                    .opacity(env.selectedTab == 3 ? 1 : 0)
+                    .allowsHitTesting(env.selectedTab == 3)
             }
-            .ignoresSafeArea(edges: .bottom)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
             
-            // Floating Dock (MiniPlayer + Custom Glass Tab Bar)
-            VStack(spacing: 8) {
+            // Floating Liquid Glass Dock (MiniPlayer + Floating Glass Tab Bar)
+            VStack(spacing: 10) {
                 // Persistent Liquid Glass Mini Player (Screen S8)
                 if playerStore.currentSnapshot != nil {
                     LiquidGlassMiniPlayer {
                         env.isNowPlayingPresented = true
                     }
-                    .padding(.horizontal, 16)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 
-                // Custom Floating Liquid Glass Navigation Bar
+                // Custom Floating Liquid Glass Navigation Capsule
                 customGlassTabBar
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
             }
             
             // Developer Telemetry HUD (Screen S11)
@@ -91,43 +110,70 @@ struct RootLifecycleStageView: View {
         }
     }
     
-    // MARK: - Custom Glass Tab Bar
+    // MARK: - Custom Floating Liquid Glass Tab Bar
     
     private var customGlassTabBar: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 6) {
             tabItem(title: "Home", systemImage: "house.fill", tag: 0)
             tabItem(title: "Search", systemImage: "magnifyingglass", tag: 1)
             tabItem(title: "Library", systemImage: "books.vertical.fill", tag: 2)
             tabItem(title: "Settings", systemImage: "gearshape.fill", tag: 3)
         }
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.black.opacity(0.65))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(theme.currentPreset.glassTintColor)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    Capsule()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.38),
+                                    Color.white.opacity(0.08),
+                                    theme.specularRimColor.opacity(0.20)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.0
+                        )
                 )
-                .shadow(color: Color.black.opacity(0.5), radius: 20, x: 0, y: 10)
-        )
+                .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: 12)
+        }
     }
     
     private func tabItem(title: String, systemImage: String, tag: Int) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+        let isSelected = env.selectedTab == tag
+        return Button {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                 env.selectedTab = tag
             }
         } label: {
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: env.selectedTab == tag ? .bold : .regular))
-                    .foregroundStyle(env.selectedTab == tag ? theme.activeAccent : Color.white.opacity(0.5))
+                    .font(.system(size: 19, weight: isSelected ? .bold : .medium))
+                    .foregroundStyle(isSelected ? theme.activeAccent : Color.white.opacity(0.45))
+                    .frame(height: 22)
                 
                 Text(title)
-                    .font(.system(size: 10, weight: env.selectedTab == tag ? .semibold : .regular))
-                    .foregroundStyle(env.selectedTab == tag ? .white : Color.white.opacity(0.5))
+                    .font(.system(size: 10, weight: isSelected ? .bold : .medium, design: .rounded))
+                    .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.45))
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background {
+                if isSelected {
+                    Capsule()
+                        .fill(theme.activeAccent.opacity(0.18))
+                        .overlay(
+                            Capsule()
+                                .stroke(theme.activeAccent.opacity(0.35), lineWidth: 0.8)
+                        )
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
         }
         .buttonStyle(.plain)
     }
