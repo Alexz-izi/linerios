@@ -31,27 +31,13 @@ struct RootLifecycleStageView: View {
     @Bindable private var playerStore = PlayerStore.shared
     @Bindable private var theme = ThemeManager.shared
     
-    @State private var showingAuthConfig: Bool = false
-    
     var body: some View {
         ZStack {
             if KeychainStore.shared.hasValidCredentials() {
                 authenticatedShell
             } else {
-                WelcomeView(onConfigureTapped: {
-                    showingAuthConfig = true
-                })
+                WelcomeView()
             }
-        }
-        .sheet(isPresented: $showingAuthConfig) {
-            AuthConfigView(
-                onConfigSaved: {
-                    // Credentials updated in Keychain
-                },
-                onDismiss: {
-                    showingAuthConfig = false
-                }
-            )
         }
     }
     

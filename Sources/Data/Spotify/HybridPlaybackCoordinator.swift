@@ -2,50 +2,58 @@
 //  HybridPlaybackCoordinator.swift
 //  LineriOS
 //
-//  Three-stage playback orchestrator arbitrating between zero-latency local IPC (Stage 1),
-//  cloud Spotify Connect REST polling (Stage 2), and URL-scheme wakeup (Stage 3).
+//  3-stage failover playback coordinator bridging:
+//  Stage 1: SPTAppRemote local IPC socket (<15ms latency)
+//  Stage 2: Spotify Web API Connect REST fallback (100-300ms latency)
+//  Stage 3: spotify:app-remote URL scheme local app wake-up
 //
 
 import Foundation
 import UIKit
+import QuartzCore
 
 @MainActor
-public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControllerProtocol {
+public final class HybridPlaybackCoordinator: PlaybackControllerProtocol {
     public static let shared = HybridPlaybackCoordinator()
 
-    public private(set) var connectionState: PlaybackConnectionState = .disconnected
+    public private(set) var connectionState: PlaybackConnectionState = .disconnected {
+        didSet {
+            RingBufferLogger.shared.log(
+                level: .info,
+                category: "Coordinator",
+                message: "Playback connection state: \(connectionState)"
+            )
+        }
+    }
+
     public private(set) var currentSnapshot: PlaybackSnapshot?
     public var onSnapshotUpdate: ((PlaybackSnapshot) -> Void)?
 
-    private let appRemoteAdapter = SpotifyAppRemoteAdapter.shared
-    private let webApiClient = SpotifyWebAPIClient.shared
+    private let appRemoteAdapter: SpotifyAppRemoteAdapter
+    private let webApiClient: SpotifyWebAPIClient
+    private let clock: ClockInterpolator
 
-    private var connectPollingTask: Task<Void, Never>?
-    private var lastObservedTrackURI: String?
+    private var pollingTask: Task<Void, Never>?
+    private var lastObservedPositionMs: Int = 0
 
-    private init() {
-        bindAdapter()
+    public init(
+        appRemoteAdapter: SpotifyAppRemoteAdapter = SpotifyAppRemoteAdapter.shared,
+        webApiClient: SpotifyWebAPIClient = SpotifyWebAPIClient.shared,
+        clock: ClockInterpolator = ClockInterpolator.shared
+    ) {
+        self.appRemoteAdapter = appRemoteAdapter
+        self.webApiClient = webApiClient
+        self.clock = clock
+
+        bindAppRemote()
     }
 
-    private func bindAdapter() {
-        appRemoteAdapter.onSnapshotUpdate = { [weak self] snapshot in
-            guard let self = self else { return }
-            self.currentSnapshot = snapshot
-            self.lastObservedTrackURI = snapshot.trackURI
-            self.onSnapshotUpdate?(snapshot)
-        }
-
-        appRemoteAdapter.onConnectionStateChange = { [weak self] state in
-            guard let self = self else { return }
-            self.handleIPCStateChange(state)
-        }
-    }
-
-    // MARK: - PlaybackControllerProtocol
+    // MARK: - PlaybackControllerProtocol: Connection Lifecycle
 
     public func connect() async throws {
-        // Stage 1: Attempt local IPC socket connection
         connectionState = .connecting
+
+        // Stage 1: Attempt local IPC connection to installed Spotify app
         do {
             try await appRemoteAdapter.connect()
             // Success -> state becomes .connectedLocalIPC via delegate callback
@@ -62,7 +70,9 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
 
     public func disconnect() {
         stopCloudPolling()
-        appRemoteAdapter.disconnect()
+        Task {
+            try? await appRemoteAdapter.disconnect()
+        }
         connectionState = .disconnected
         currentSnapshot = nil
     }
@@ -78,13 +88,10 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
         }
 
         // Cloud Web API Fallback
-        do {
+        if let uri = uri, !uri.isEmpty {
             try await webApiClient.play(uri: uri)
-            await refreshCloudSnapshot()
-        } catch {
-            // Stage 3: Auto-wakeup via URL Scheme if background app is terminated
-            tryWakeSpotifyApp(uri: uri)
-            throw error
+        } else {
+            try await webApiClient.resume()
         }
     }
 
@@ -98,7 +105,6 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
             }
         }
         try await webApiClient.pause()
-        await refreshCloudSnapshot()
     }
 
     public func skipNext() async throws {
@@ -111,8 +117,6 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
             }
         }
         try await webApiClient.skipNext()
-        try? await Task.sleep(for: .milliseconds(300))
-        await refreshCloudSnapshot()
     }
 
     public func skipPrevious() async throws {
@@ -125,8 +129,6 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
             }
         }
         try await webApiClient.skipPrevious()
-        try? await Task.sleep(for: .milliseconds(300))
-        await refreshCloudSnapshot()
     }
 
     public func seek(toPositionMs positionMs: Int) async throws {
@@ -138,8 +140,7 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
                 RingBufferLogger.shared.log(level: .warn, category: "Coordinator", message: "IPC seek failed. Retrying via Web API.")
             }
         }
-        try await webApiClient.seek(positionMs: positionMs)
-        await refreshCloudSnapshot()
+        try await webApiClient.seek(toPositionMs: positionMs)
     }
 
     public func setShuffle(_ enabled: Bool) async throws {
@@ -148,11 +149,10 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
                 try await appRemoteAdapter.setShuffle(enabled)
                 return
             } catch {
-                RingBufferLogger.shared.log(level: .warn, category: "Coordinator", message: "IPC shuffle failed.")
+                RingBufferLogger.shared.log(level: .warn, category: "Coordinator", message: "IPC shuffle failed. Retrying via Web API.")
             }
         }
-        try await webApiClient.setShuffle(enabled: enabled)
-        await refreshCloudSnapshot()
+        try await webApiClient.setShuffle(enabled)
     }
 
     public func setRepeatMode(_ mode: RepeatMode) async throws {
@@ -161,80 +161,89 @@ public final class HybridPlaybackCoordinator: ObservableObject, PlaybackControll
                 try await appRemoteAdapter.setRepeatMode(mode)
                 return
             } catch {
-                RingBufferLogger.shared.log(level: .warn, category: "Coordinator", message: "IPC repeat mode failed.")
+                RingBufferLogger.shared.log(level: .warn, category: "Coordinator", message: "IPC repeat mode failed. Retrying via Web API.")
             }
         }
-        try await webApiClient.setRepeat(mode: mode)
-        await refreshCloudSnapshot()
+        try await webApiClient.setRepeatMode(mode)
     }
 
-    // MARK: - Stage Failover Management
+    // MARK: - Stage 3: Local App Wake-up
 
-    private func handleIPCStateChange(_ state: PlaybackConnectionState) {
-        self.connectionState = state
-        if state == .connectedLocalIPC {
-            stopCloudPolling()
-        } else if state == .disconnected {
-            transitionToCloudConnect()
+    public func wakeSpotifyApp() {
+        guard let url = URL(string: "spotify-action://") ?? URL(string: "spotify://") else { return }
+        UIApplication.shared.open(url, options: [:]) { success in
+            if success {
+                RingBufferLogger.shared.log(level: .info, category: "Coordinator", message: "Triggered Stage 3 Spotify URL scheme wake-up")
+            }
+        }
+    }
+
+    // MARK: - Bindings & Internal Synchronization
+
+    private func bindAppRemote() {
+        appRemoteAdapter.onConnectionStateChange = { [weak self] state in
+            guard let self = self else { return }
+            self.connectionState = state
+            if state == .connectedLocalIPC {
+                self.stopCloudPolling()
+            } else if state == .disconnected {
+                self.transitionToCloudConnect()
+            }
+        }
+
+        appRemoteAdapter.onSnapshotUpdate = { [weak self] snapshot in
+            guard let self = self else { return }
+            self.currentSnapshot = snapshot
+            self.onSnapshotUpdate?(snapshot)
+
+            // Update CADisplayLink monotonic clock anchor
+            self.clock.updateAnchor(
+                positionMs: snapshot.anchorPositionMs,
+                monotonicTime: snapshot.anchorMonotonicTime,
+                isPlaying: snapshot.isPlaying
+            )
         }
     }
 
     private func transitionToCloudConnect() {
-        guard connectPollingTask == nil else { return }
         connectionState = .connectedCloudWebAPI
         startCloudPolling()
     }
 
     private func startCloudPolling() {
-        connectPollingTask?.cancel()
-        connectPollingTask = Task { [weak self] in
+        stopCloudPolling()
+        pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self = self else { break }
-                await self.refreshCloudSnapshot()
-                // Respect token bucket rate limits: poll every 5.0 seconds
-                try? await Task.sleep(for: .seconds(5))
+                do {
+                    if let snapshot = try await self.webApiClient.getCurrentPlaybackState() {
+                        await MainActor.run {
+                            self.currentSnapshot = snapshot
+                            self.onSnapshotUpdate?(snapshot)
+                            self.clock.updateAnchor(
+                                positionMs: snapshot.anchorPositionMs,
+                                monotonicTime: snapshot.anchorMonotonicTime,
+                                isPlaying: snapshot.isPlaying
+                            )
+                        }
+                    }
+                } catch {
+                    if case WebAPIError.rateLimited(let retryAfter) = error {
+                        await MainActor.run {
+                            self.connectionState = .rateLimited(retryAfter: retryAfter)
+                        }
+                        try? await Task.sleep(for: .seconds(retryAfter))
+                    }
+                }
+
+                // Poll every 3 seconds while in Cloud Connect fallback mode
+                try? await Task.sleep(for: .seconds(3))
             }
         }
     }
 
     private func stopCloudPolling() {
-        connectPollingTask?.cancel()
-        connectPollingTask = nil
-    }
-
-    private func refreshCloudSnapshot() async {
-        do {
-            if let snapshot = try await webApiClient.getPlaybackState() {
-                self.currentSnapshot = snapshot
-                self.lastObservedTrackURI = snapshot.trackURI
-                self.onSnapshotUpdate?(snapshot)
-            }
-        } catch {
-            if case WebAPIError.rateLimited(let sec) = error {
-                self.connectionState = .rateLimited(retryAfter: sec)
-            }
-        }
-    }
-
-    private func tryWakeSpotifyApp(uri: String?) {
-        let wakeTarget = uri ?? lastObservedTrackURI ?? ""
-        let wakeURLString = wakeTarget.isEmpty ? "spotify:" : wakeTarget
-        guard let url = URL(string: wakeURLString), UIApplication.shared.canOpenURL(url) else {
-            return
-        }
-
-        RingBufferLogger.shared.log(
-            level: .info,
-            category: "Coordinator",
-            message: "Stage 3 Auto-Wake: Launching Spotify background engine via \(wakeURLString)"
-        )
-        UIApplication.shared.open(url, options: [:]) { success in
-            if success {
-                Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(800))
-                    try? await self?.appRemoteAdapter.connect()
-                }
-            }
-        }
+        pollingTask?.cancel()
+        pollingTask = nil
     }
 }

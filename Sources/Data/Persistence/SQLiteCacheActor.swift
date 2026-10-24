@@ -28,14 +28,27 @@ public actor SQLiteCacheActor {
     }
 
     public init(databaseURL: URL? = nil) {
+        let url: URL
         if let customURL = databaseURL {
-            self.dbURL = customURL
+            url = customURL
         } else {
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            self.dbURL = docs.appendingPathComponent("liner_cache.sqlite")
+            url = docs.appendingPathComponent("liner_cache.sqlite")
         }
-        openDatabase()
-        createTables()
+        self.dbURL = url
+
+        var dbPointer: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        if sqlite3_open_v2(url.path, &dbPointer, flags, nil) == SQLITE_OK {
+            self.db = dbPointer
+            Self.executeRaw(db: dbPointer, sql: "PRAGMA journal_mode = WAL;")
+            Self.executeRaw(db: dbPointer, sql: "PRAGMA synchronous = NORMAL;")
+            Self.executeRaw(db: dbPointer, sql: "PRAGMA foreign_keys = ON;")
+            Self.createTables(db: dbPointer)
+        } else {
+            self.db = nil
+            RingBufferLogger.shared.log(level: .error, category: "SQLite", message: "Failed to open database at \(url.path)")
+        }
     }
 
     deinit {
@@ -46,21 +59,7 @@ public actor SQLiteCacheActor {
 
     // MARK: - Database Setup
 
-    private func openDatabase() {
-        var dbPointer: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        if sqlite3_open_v2(dbURL.path, &dbPointer, flags, nil) == SQLITE_OK {
-            self.db = dbPointer
-            // Enable WAL mode for high-concurrency read/write without SQLITE_BUSY locks
-            executeRaw(sql: "PRAGMA journal_mode = WAL;")
-            executeRaw(sql: "PRAGMA synchronous = NORMAL;")
-            executeRaw(sql: "PRAGMA foreign_keys = ON;")
-        } else {
-            RingBufferLogger.shared.log(level: .error, category: "SQLite", message: "Failed to open database at \(dbURL.path)")
-        }
-    }
-
-    private func createTables() {
+    private static func createTables(db: OpaquePointer?) {
         let createLyricsSQL = """
         CREATE TABLE IF NOT EXISTS lyrics_cache (
             track_uri TEXT PRIMARY KEY,
@@ -94,12 +93,12 @@ public actor SQLiteCacheActor {
         );
         """
 
-        executeRaw(sql: createLyricsSQL)
-        executeRaw(sql: createPaletteSQL)
-        executeRaw(sql: createMetadataSQL)
+        executeRaw(db: db, sql: createLyricsSQL)
+        executeRaw(db: db, sql: createPaletteSQL)
+        executeRaw(db: db, sql: createMetadataSQL)
     }
 
-    private func executeRaw(sql: String) {
+    private static func executeRaw(db: OpaquePointer?, sql: String) {
         guard let db = db else { return }
         var errMsg: UnsafeMutablePointer<CChar>?
         if sqlite3_exec(db, sql, nil, nil, &errMsg) != SQLITE_OK {
@@ -107,6 +106,10 @@ public actor SQLiteCacheActor {
             RingBufferLogger.shared.log(level: .warn, category: "SQLite", message: "Raw SQL failed: \(message)")
             sqlite3_free(errMsg)
         }
+    }
+
+    private func executeRaw(sql: String) {
+        Self.executeRaw(db: self.db, sql: sql)
     }
 
     // MARK: - Lyrics Cache Operations

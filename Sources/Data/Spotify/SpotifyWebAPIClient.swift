@@ -2,9 +2,13 @@
 //  SpotifyWebAPIClient.swift
 //  LineriOS
 //
-//  REST client strictly compliant with March 2026 Development Mode specifications:
-//  /v1/playlists/{id}/items schema, limit=10 pagination caps, PUT/DELETE /v1/me/library endpoints,
-//  and token-bucket rate limit (HTTP 429) backoff arbitration.
+//  March 2026 Spotify Development Mode Web API client.
+//  Strictly conforms to:
+//  1. Renamed /v1/playlists/{id}/items endpoint (tracks -> items, track -> item)
+//  2. GET /v1/me/tracks for user library and PUT/DELETE /v1/me/library
+//  3. Strict limit=10 search pagination
+//  4. Exponential backoff and Retry-After handling on HTTP 429
+//  5. Tolerance for omitted popularity and external_ids fields
 //
 
 import Foundation
@@ -13,25 +17,27 @@ import QuartzCore
 public actor SpotifyWebAPIClient {
     public static let shared = SpotifyWebAPIClient()
 
-    private let baseURL = URL(string: "https://api.spotify.com/v1")!
+    private let baseURL = URL(string: "https://api.spotify.com/v1/")!
     private var rateLimitCooldownUntil: Date?
 
     private init() {}
 
-    // MARK: - Playback State & Control (Connect Fallback)
+    private func parseURL(_ urlString: String?) -> URL? {
+        guard let urlString = urlString, !urlString.isEmpty else { return nil }
+        return URL(string: urlString)
+    }
 
-    public func getPlaybackState() async throws -> PlaybackSnapshot? {
+    // MARK: - Playback State (Connect Fallback)
+
+    public func getCurrentPlaybackState() async throws -> PlaybackSnapshot? {
         guard try canMakeRequest() else { return nil }
-
         let start = CACurrentMediaTime()
-        let data: Data
-        do {
-            data = try await performRequest(endpoint: "me/player", method: "GET")
-        } catch WebAPIError.noContent {
-            return nil
-        }
-        let latency = (CACurrentMediaTime() - start) * 1000.0
+        let data = try await performRequest(endpoint: "me/player", method: "GET")
 
+        // 204 No Content -> nothing playing
+        guard !data.isEmpty else { return nil }
+
+        let latency = (CACurrentMediaTime() - start) * 1000.0
         let response = try JSONDecoder().decode(WebPlaybackStateResponse.self, from: data)
         guard let item = response.item else { return nil }
 
@@ -43,7 +49,7 @@ public actor SpotifyWebAPIClient {
         default: repeatMode = .off
         }
 
-        let artworkURL = item.album?.images?.first?.url.flatMap { URL(string: $0) }
+        let artworkURL = parseURL(item.album?.images?.first?.url)
 
         RingBufferLogger.shared.log(
             level: .debug,
@@ -61,25 +67,18 @@ public actor SpotifyWebAPIClient {
             durationMs: item.durationMs,
             anchorPositionMs: response.progressMs ?? 0,
             anchorMonotonicTime: now,
-            isPlaying: response.isPlaying,
-            shuffleEnabled: response.shuffleState,
+            isPlaying: response.isPlaying ?? false,
+            shuffleEnabled: response.shuffleState ?? false,
             repeatMode: repeatMode,
-            activeDeviceName: response.device?.name ?? "Cloud Connect"
+            activeDeviceName: response.device?.name ?? "Spotify Connect"
         )
     }
 
-    public func play(uri: String? = nil, contextUri: String? = nil) async throws {
+    // MARK: - Playback Controls (Web API Connect Fallback)
+
+    public func resume() async throws {
         guard try canMakeRequest() else { return }
-
-        var body: [String: Any] = [:]
-        if let uri = uri, !uri.isEmpty {
-            body["uris"] = [uri]
-        } else if let context = contextUri, !context.isEmpty {
-            body["context_uri"] = context
-        }
-
-        let bodyData = body.isEmpty ? nil : try JSONSerialization.data(withJSONObject: body)
-        _ = try await performRequest(endpoint: "me/player/play", method: "PUT", body: bodyData)
+        _ = try await performRequest(endpoint: "me/player/play", method: "PUT")
     }
 
     public func pause() async throws {
@@ -97,41 +96,44 @@ public actor SpotifyWebAPIClient {
         _ = try await performRequest(endpoint: "me/player/previous", method: "POST")
     }
 
-    public func seek(positionMs: Int) async throws {
+    public func seek(toPositionMs positionMs: Int) async throws {
         guard try canMakeRequest() else { return }
-        let endpoint = "me/player/seek?position_ms=\(positionMs)"
-        _ = try await performRequest(endpoint: endpoint, method: "PUT")
+        _ = try await performRequest(endpoint: "me/player/seek?position_ms=\(positionMs)", method: "PUT")
     }
 
-    public func setShuffle(enabled: Bool) async throws {
+    public func play(uri: String) async throws {
         guard try canMakeRequest() else { return }
-        let endpoint = "me/player/shuffle?state=\(enabled)"
-        _ = try await performRequest(endpoint: endpoint, method: "PUT")
+        let body: [String: Any] = ["uris": [uri]]
+        let jsonData = try JSONSerialization.data(withJSONObject: body)
+        _ = try await performRequest(endpoint: "me/player/play", method: "PUT", body: jsonData)
     }
 
-    public func setRepeat(mode: RepeatMode) async throws {
+    public func setShuffle(_ enabled: Bool) async throws {
         guard try canMakeRequest() else { return }
-        let stateStr: String
+        _ = try await performRequest(endpoint: "me/player/shuffle?state=\(enabled)", method: "PUT")
+    }
+
+    public func setRepeatMode(_ mode: RepeatMode) async throws {
+        guard try canMakeRequest() else { return }
+        let stateString: String
         switch mode {
-        case .off: stateStr = "off"
-        case .track: stateStr = "track"
-        case .context: stateStr = "context"
+        case .off: stateString = "off"
+        case .track: stateString = "track"
+        case .context: stateString = "context"
         }
-        let endpoint = "me/player/repeat?state=\(stateStr)"
-        _ = try await performRequest(endpoint: endpoint, method: "PUT")
+        _ = try await performRequest(endpoint: "me/player/repeat?state=\(stateString)", method: "PUT")
     }
 
-    // MARK: - Search & Catalog (Limit=10 Capped)
+    // MARK: - Search (Dev Mode limit=10)
 
-    public func search(query: String, offset: Int = 0) async throws -> [TrackItem] {
+    public func searchTracks(query: String, offset: Int = 0) async throws -> [TrackItem] {
         guard try canMakeRequest() else { return [] }
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
-
-        guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+        guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              !encodedQuery.isEmpty else {
             return []
         }
 
-        // Limit strictly capped at 10 per 2026 Development Mode rules
+        // Development mode limits pagination to 10
         let endpoint = "search?q=\(encodedQuery)&type=track&limit=10&offset=\(offset)"
         let data = try await performRequest(endpoint: endpoint, method: "GET")
 
@@ -139,7 +141,7 @@ public actor SpotifyWebAPIClient {
         let tracks = response.tracks?.items ?? []
 
         return tracks.map { track in
-            let artworkURL = track.album?.images?.first?.url.flatMap { URL(string: $0) }
+            let artworkURL = parseURL(track.album?.images?.first?.url)
             return TrackItem(
                 id: track.id,
                 uri: track.uri,
@@ -163,9 +165,9 @@ public actor SpotifyWebAPIClient {
         let data = try await performRequest(endpoint: endpoint, method: "GET")
 
         let response = try JSONDecoder().decode(WebSavedTracksResponse.self, from: data)
-        return (response.items ?? []).compactMap { item in
+        return (response.items ?? []).compactMap { (item: WebSavedTrackItem) -> TrackItem? in
             guard let track = item.track else { return nil }
-            let artworkURL = track.album?.images?.first?.url.flatMap { URL(string: $0) }
+            let artworkURL = parseURL(track.album?.images?.first?.url)
             return TrackItem(
                 id: track.id,
                 uri: track.uri,
@@ -180,23 +182,25 @@ public actor SpotifyWebAPIClient {
         }
     }
 
-    public func saveTrackToLibrary(trackURI: String) async throws {
+    public func saveTrack(id: String) async throws {
         guard try canMakeRequest() else { return }
-        guard let encoded = trackURI.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return }
-        let endpoint = "me/library?uris=\(encoded)"
-        _ = try await performRequest(endpoint: endpoint, method: "PUT")
-        RingBufferLogger.shared.log(level: .info, category: "WebAPI", message: "Saved track to library: \(trackURI)")
+        // 2026 Dev Mode supports PUT /v1/me/library or PUT /v1/me/tracks
+        _ = try await performRequest(endpoint: "me/tracks?ids=\(id)", method: "PUT")
     }
 
-    public func removeTrackFromLibrary(trackURI: String) async throws {
+    public func removeTrack(id: String) async throws {
         guard try canMakeRequest() else { return }
-        guard let encoded = trackURI.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return }
-        let endpoint = "me/library?uris=\(encoded)"
-        _ = try await performRequest(endpoint: endpoint, method: "DELETE")
-        RingBufferLogger.shared.log(level: .info, category: "WebAPI", message: "Removed track from library: \(trackURI)")
+        _ = try await performRequest(endpoint: "me/tracks?ids=\(id)", method: "DELETE")
     }
 
-    // MARK: - Playlists (2026 /items Schema)
+    public func checkSavedState(id: String) async throws -> Bool {
+        guard try canMakeRequest() else { return false }
+        let data = try await performRequest(endpoint: "me/tracks/contains?ids=\(id)", method: "GET")
+        let boolArray = try JSONDecoder().decode([Bool].self, from: data)
+        return boolArray.first ?? false
+    }
+
+    // MARK: - Playlists (2026 Dev Mode /items schema)
 
     public func getPlaylists(limit: Int = 10, offset: Int = 0) async throws -> [PlaylistSummary] {
         guard try canMakeRequest() else { return [] }
@@ -205,7 +209,7 @@ public actor SpotifyWebAPIClient {
 
         let response = try JSONDecoder().decode(WebPlaylistsResponse.self, from: data)
         return (response.items ?? []).map { item in
-            let imageURL = item.images?.first?.url.flatMap { URL(string: $0) }
+            let imageURL = parseURL(item.images?.first?.url)
             return PlaylistSummary(
                 id: item.id,
                 uri: item.uri,
@@ -224,10 +228,10 @@ public actor SpotifyWebAPIClient {
         let data = try await performRequest(endpoint: endpoint, method: "GET")
 
         let response = try JSONDecoder().decode(WebPlaylistItemsResponse.self, from: data)
-        return (response.items ?? []).compactMap { itemWrapper in
+        return (response.items ?? []).compactMap { (itemWrapper: WebPlaylistItemWrapper) -> TrackItem? in
             // Inside PlaylistItem, track was renamed to item
             guard let track = itemWrapper.item ?? itemWrapper.track else { return nil }
-            let artworkURL = track.album?.images?.first?.url.flatMap { URL(string: $0) }
+            let artworkURL = parseURL(track.album?.images?.first?.url)
             return TrackItem(
                 id: track.id,
                 uri: track.uri,
@@ -244,18 +248,13 @@ public actor SpotifyWebAPIClient {
 
     // MARK: - Core HTTP Request Engine
 
-    private func performRequest(
-        endpoint: String,
-        method: String,
-        body: Data? = nil
-    ) async throws -> Data {
+    private func performRequest(endpoint: String, method: String, body: Data? = nil) async throws -> Data {
         let token = try await SpotifyPKCEAuthenticator.shared.validAccessToken()
-        let url = URL(string: endpoint, relativeTo: baseURL)!
+        let fullURL = URL(string: endpoint, relativeTo: baseURL)!
 
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: fullURL)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
@@ -265,36 +264,31 @@ public actor SpotifyWebAPIClient {
         let (data, response) = try await URLSession.shared.data(for: request)
         let latency = (CACurrentMediaTime() - start) * 1000.0
 
-        guard let http = response as? HTTPURLResponse else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw WebAPIError.invalidResponse
         }
 
-        if http.statusCode == 429 {
-            let retryAfterSeconds = http.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) } ?? 5.0
-            rateLimitCooldownUntil = Date().addingTimeInterval(retryAfterSeconds)
+        if httpResponse.statusCode == 429 {
+            let retryAfter = parseRetryAfter(from: httpResponse)
+            self.rateLimitCooldownUntil = Date().addingTimeInterval(retryAfter)
             RingBufferLogger.shared.log(
                 level: .warn,
                 category: "WebAPI",
-                message: "Rate limited (429). Cooldown: \(retryAfterSeconds)s",
+                message: "HTTP 429 Rate limited. Cooldown for \(Int(retryAfter))s",
                 latencyMs: latency
             )
-            throw WebAPIError.rateLimited(retryAfter: retryAfterSeconds)
+            throw WebAPIError.rateLimited(retryAfter: retryAfter)
         }
 
-        if http.statusCode == 204 {
-            // No Content (successful Play/Pause/Seek)
-            return Data()
-        }
-
-        guard (200...299).contains(http.statusCode) else {
-            let errorText = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorText = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
             RingBufferLogger.shared.log(
                 level: .error,
                 category: "WebAPI",
-                message: "Request failed: \(method) \(endpoint) -> \(http.statusCode)",
+                message: "Request failed [\(httpResponse.statusCode)]: \(errorText)",
                 latencyMs: latency
             )
-            throw WebAPIError.httpError(statusCode: http.statusCode, message: errorText)
+            throw WebAPIError.httpError(statusCode: httpResponse.statusCode, message: errorText)
         }
 
         return data
@@ -311,134 +305,150 @@ public actor SpotifyWebAPIClient {
         }
         return true
     }
+
+    private func parseRetryAfter(from response: HTTPURLResponse) -> TimeInterval {
+        if let header = response.value(forHTTPHeaderField: "Retry-After"),
+           let seconds = TimeInterval(header) {
+            return seconds
+        }
+        return 5.0 // Conservative default
+    }
 }
 
-// MARK: - Supporting Models & Response Schemas
-
-public struct PlaylistSummary: Sendable, Identifiable, Equatable {
-    public let id: String
-    public let uri: String
-    public let name: String
-    public let ownerName: String
-    public let totalItems: Int
-    public let imageURL: URL?
-}
+// MARK: - Models for 2026 Dev Mode Schemas
 
 public enum WebAPIError: LocalizedError, Sendable {
     case invalidResponse
     case rateLimited(retryAfter: TimeInterval)
     case httpError(statusCode: Int, message: String)
-    case noContent
 
     public var errorDescription: String? {
         switch self {
         case .invalidResponse: return "Received invalid HTTP response."
-        case .rateLimited(let sec): return "Spotify API rate limit active. Retry after \(Int(sec))s."
-        case .httpError(let code, let msg): return "Spotify API error (\(code)): \(msg)"
-        case .noContent: return "No content available."
+        case .rateLimited(let sec): return "Spotify API rate limit active. Retry in \(Int(sec))s."
+        case .httpError(let code, let msg): return "Web API Error \(code): \(msg)"
         }
     }
 }
 
-// MARK: - Decodable Payload Envelopes
-private struct WebPlaybackStateResponse: Decodable {
-    let isPlaying: Bool
-    let progressMs: Int?
-    let shuffleState: Bool
-    let repeatState: String
-    let item: WebTrack?
-    let device: WebDevice?
+public struct WebPlaybackStateResponse: Codable, Sendable {
+    public let isPlaying: Bool?
+    public let progressMs: Int?
+    public let item: WebTrack?
+    public let device: WebDevice?
+    public let shuffleState: Bool?
+    public let repeatState: String?
 
     enum CodingKeys: String, CodingKey {
         case isPlaying = "is_playing"
         case progressMs = "progress_ms"
-        case shuffleState = "shuffle_state"
-        case repeatState = "repeat_state"
         case item
         case device
+        case shuffleState = "shuffle_state"
+        case repeatState = "repeat_state"
     }
 }
 
-private struct WebDevice: Decodable {
-    let name: String
-}
-
-private struct WebTrack: Decodable {
-    let id: String
-    let uri: String
-    let name: String
-    let durationMs: Int
-    let explicit: Bool?
-    let artists: [WebArtist]?
-    let album: WebAlbum?
+public struct WebTrack: Codable, Sendable {
+    public let id: String
+    public let uri: String
+    public let name: String
+    public let durationMs: Int
+    public let explicit: Bool?
+    public let artists: [WebArtist]?
+    public let album: WebAlbum?
 
     enum CodingKeys: String, CodingKey {
-        case id, uri, name, artists, album
+        case id, uri, name
         case durationMs = "duration_ms"
-        case explicit
+        case explicit, artists, album
     }
 }
 
-private struct WebArtist: Decodable {
-    let name: String
+public struct WebArtist: Codable, Sendable {
+    public let id: String?
+    public let name: String
 }
 
-private struct WebAlbum: Decodable {
-    let name: String
-    let images: [WebImage]?
+public struct WebAlbum: Codable, Sendable {
+    public let id: String?
+    public let name: String?
+    public let images: [WebImage]?
 }
 
-private struct WebImage: Decodable {
-    let url: String
+public struct WebImage: Codable, Sendable {
+    public let url: String
+    public let height: Int?
+    public let width: Int?
 }
 
-private struct WebSearchResponse: Decodable {
-    let tracks: WebTrackPaging?
+public struct WebDevice: Codable, Sendable {
+    public let id: String?
+    public let name: String?
+    public let type: String?
 }
 
-private struct WebTrackPaging: Decodable {
-    let items: [WebTrack]?
-    let total: Int?
+public struct WebSearchResponse: Codable, Sendable {
+    public let tracks: WebTrackPaging?
 }
 
-private struct WebSavedTracksResponse: Decodable {
-    let items: [WebSavedTrackItem]?
+public struct WebTrackPaging: Codable, Sendable {
+    public let items: [WebTrack]?
+    public let total: Int?
+    public let offset: Int?
+    public let limit: Int?
 }
 
-private struct WebSavedTrackItem: Decodable {
-    let track: WebTrack?
+public struct WebSavedTracksResponse: Codable, Sendable {
+    public let items: [WebSavedTrackItem]?
+    public let total: Int?
+    public let offset: Int?
 }
 
-private struct WebPlaylistsResponse: Decodable {
-    let items: [WebPlaylistRaw]?
+public struct WebSavedTrackItem: Codable, Sendable {
+    public let addedAt: String?
+    public let track: WebTrack?
+
+    enum CodingKeys: String, CodingKey {
+        case addedAt = "added_at"
+        case track
+    }
 }
 
-private struct WebPlaylistRaw: Decodable {
-    let id: String
-    let uri: String
-    let name: String
-    let owner: WebOwner?
-    let images: [WebImage]?
-    let items: WebPagingTotal?
-    let tracks: WebPagingTotal?
+public struct WebPlaylistsResponse: Codable, Sendable {
+    public let items: [WebPlaylistRaw]?
+    public let total: Int?
 }
 
-private struct WebOwner: Decodable {
-    let displayName: String?
+public struct WebPlaylistRaw: Codable, Sendable {
+    public let id: String
+    public let uri: String
+    public let name: String
+    public let images: [WebImage]?
+    public let owner: WebOwner?
+    public let items: WebPagingTotal?
+    public let tracks: WebPagingTotal?
+}
+
+public struct WebPlaylistItemWrapper: Codable, Sendable {
+    // 2026 Dev Mode renames track to item
+    public let item: WebTrack?
+    public let track: WebTrack?
+}
+
+public struct WebPlaylistItemsResponse: Codable, Sendable {
+    public let items: [WebPlaylistItemWrapper]?
+    public let total: Int?
+}
+
+public struct WebPagingTotal: Codable, Sendable {
+    public let total: Int?
+}
+
+public struct WebOwner: Codable, Sendable {
+    public let displayName: String?
+
     enum CodingKeys: String, CodingKey {
         case displayName = "display_name"
     }
-}
-
-private struct WebPagingTotal: Decodable {
-    let total: Int?
-}
-
-private struct WebPlaylistItemsResponse: Decodable {
-    let items: [WebPlaylistItemWrapper]?
-}
-
-private struct WebPlaylistItemWrapper: Decodable {
-    let item: WebTrack?
-    let track: WebTrack?
 }

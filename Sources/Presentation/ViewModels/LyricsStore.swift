@@ -112,6 +112,10 @@ public final class LyricsStore {
         }
     }
 
+    public func adjustOffset(by deltaMs: Int) {
+        adjustOffset(deltaMs: deltaMs)
+    }
+
     public func resetOffset() {
         self.userOffsetMs = 0
         self.clock.setUserOffset(ms: 0)
@@ -160,7 +164,33 @@ public final class LyricsStore {
         word.progress(at: currentPlaybackTimeMs)
     }
 
+    public func progressForWord(_ word: LyricWordToken) -> Double {
+        syllableProgress(for: word)
+    }
+
     public func isWordActive(_ word: LyricWordToken) -> Bool {
         currentPlaybackTimeMs >= word.startTimeMs && currentPlaybackTimeMs < word.endTimeMs
+    }
+
+    public func blurForLine(index: Int) -> CGFloat {
+        guard let active = activeLineIndex else { return 0.0 }
+        let distance = abs(active - index)
+        switch distance {
+        case 0: return 0.0
+        case 1: return 1.5
+        case 2: return 3.5
+        default: return 6.0
+        }
+    }
+
+    public func opacityForLine(index: Int) -> Double {
+        guard let active = activeLineIndex else { return 0.5 }
+        let distance = abs(active - index)
+        switch distance {
+        case 0: return 1.0
+        case 1: return 0.65
+        case 2: return 0.35
+        default: return 0.15
+        }
     }
 }

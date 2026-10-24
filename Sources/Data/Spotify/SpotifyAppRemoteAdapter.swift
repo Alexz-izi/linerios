@@ -48,6 +48,14 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
         self.appRemote = remote
     }
 
+    public func authorizeAndPlayURI(_ uri: String = "") {
+        if appRemote == nil {
+            configure()
+        }
+        guard let appRemote = self.appRemote else { return }
+        appRemote.authorizeAndPlayURI(uri)
+    }
+
     public func connect() async throws {
         if appRemote == nil {
             configure()
@@ -224,8 +232,8 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
         let sptMode: SPTAppRemotePlaybackOptionsRepeatMode
         switch mode {
         case .off: sptMode = .off
-        case .track: sptMode = .one
-        case .context: sptMode = .all
+        case .track: sptMode = .track
+        case .context: sptMode = .context
         }
 
         let start = CACurrentMediaTime()
@@ -310,8 +318,8 @@ extension SpotifyAppRemoteAdapter: SPTAppRemotePlayerStateDelegate {
         let repeatMode: RepeatMode
         switch playerState.playbackOptions.repeatMode {
         case .off: repeatMode = .off
-        case .one: repeatMode = .track
-        case .all: repeatMode = .context
+        case .track: repeatMode = .track
+        case .context: repeatMode = .context
         @unknown default: repeatMode = .off
         }
 

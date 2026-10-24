@@ -81,6 +81,14 @@ public final class ThemeManager {
 
     // MARK: - Active Mesh Color Tokens
 
+    public var bgPrimary: Color {
+        currentPreset.bgPrimary
+    }
+
+    public var bgSecondary: Color {
+        currentPreset.bgSecondary
+    }
+
     public var meshColor0: Color {
         if let pal = extractedPalette, useAdaptiveAtmosphere {
             return Color(hex: pal.bgHex0)
