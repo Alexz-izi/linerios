@@ -38,6 +38,20 @@ public final class PlayerStore {
             if !self.isScrubbing {
                 self.scrubberPositionMs = Double(snapshot.anchorPositionMs)
             }
+            if !snapshot.trackURI.isEmpty && !snapshot.title.isEmpty {
+                let track = TrackItem(
+                    id: snapshot.trackURI.replacingOccurrences(of: "spotify:track:", with: ""),
+                    uri: snapshot.trackURI,
+                    title: snapshot.title,
+                    artistName: snapshot.artist,
+                    albumName: snapshot.album,
+                    artworkURL: snapshot.artworkURL,
+                    durationMs: snapshot.durationMs,
+                    isExplicit: false,
+                    isSaved: false
+                )
+                LibraryStore.shared.recordRecentlyPlayed(track)
+            }
         }
     }
 

@@ -148,12 +148,25 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
     }
 
     public func validAccessToken() async throws -> String {
+        // 1. Check live App Remote IPC token in memory first
+        if let liveToken = SpotifyAppRemoteAdapter.shared.appRemote?.connectionParameters.accessToken,
+           !liveToken.isEmpty {
+            return liveToken
+        }
+
+        // 2. Hardware Keychain cached token
         if KeychainStore.shared.hasValidAccessToken(),
-           let token = KeychainStore.shared.get(stringForKey: .accessToken) {
+           let token = KeychainStore.shared.get(stringForKey: .accessToken),
+           !token.isEmpty {
             return token
         }
 
+        // 3. PKCE Refresh Token flow
         guard let refreshToken = KeychainStore.shared.get(stringForKey: .refreshToken) else {
+            // Fallback to existing token in Keychain if available
+            if let token = KeychainStore.shared.get(stringForKey: .accessToken), !token.isEmpty {
+                return token
+            }
             throw AuthError.notAuthenticated
         }
 

@@ -66,6 +66,7 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
             if let token = params[SPTAppRemoteAccessTokenKey], !token.isEmpty {
                 appRemote.connectionParameters.accessToken = token
                 KeychainStore.shared.set(string: token, forKey: .accessToken)
+                KeychainStore.shared.set(date: Date().addingTimeInterval(3600 * 24), forKey: .tokenExpiry)
                 Task { @MainActor in
                     do {
                         try await self.connect()
@@ -76,6 +77,7 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
                             message: "Post-auth connection failed: \(error.localizedDescription)"
                         )
                     }
+                    await LibraryStore.shared.loadLibrary()
                 }
                 return true
             }
@@ -90,8 +92,10 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
                     let token = pair[1]
                     appRemote.connectionParameters.accessToken = token
                     KeychainStore.shared.set(string: token, forKey: .accessToken)
+                    KeychainStore.shared.set(date: Date().addingTimeInterval(3600 * 24), forKey: .tokenExpiry)
                     Task { @MainActor in
                         try? await self.connect()
+                        await LibraryStore.shared.loadLibrary()
                     }
                     return true
                 }

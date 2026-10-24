@@ -335,6 +335,29 @@ public struct SettingsView: View {
                 .foregroundStyle(.white.opacity(0.7))
             
             Button {
+                Task {
+                    do {
+                        try await LibraryStore.shared.authorizeFullLibrary()
+                        statusMessage = "Spotify Library synced"
+                    } catch {
+                        statusMessage = "Auth: \(error.localizedDescription)"
+                    }
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "lock.open.fill")
+                    Text("Re-authorize & Sync Spotify Library")
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(themeManager.activeAccent)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+
+            Button {
                 playerStore.disconnectAndClearCredentials()
                 statusMessage = "Spotify disconnected"
             } label: {

@@ -95,11 +95,14 @@ public final class KeychainStore: @unchecked Sendable {
     }
 
     public func hasValidAccessToken() -> Bool {
-        guard let _ = get(stringForKey: .accessToken),
-              let expiry = get(dateForKey: .tokenExpiry) else {
+        guard let token = get(stringForKey: .accessToken), !token.isEmpty else {
             return false
         }
-        return expiry.timeIntervalSinceNow > 60 // 60s buffer before expiry
+        if let expiry = get(dateForKey: .tokenExpiry) {
+            return expiry.timeIntervalSinceNow > -300 // Allow grace window
+        }
+        // If an access token is present without explicit expiry (e.g. App Remote), treat as valid
+        return true
     }
 
     public func hasValidCredentials() -> Bool {

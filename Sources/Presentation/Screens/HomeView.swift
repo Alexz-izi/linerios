@@ -58,6 +58,11 @@ public struct HomeView: View {
             .task {
                 await loadHomeData()
             }
+            .onChange(of: libraryStore.recentlyPlayed) { _, newTracks in
+                if !newTracks.isEmpty {
+                    self.recentTracks = newTracks
+                }
+            }
         }
     }
 
@@ -181,27 +186,48 @@ public struct HomeView: View {
                     .padding(.horizontal, 16)
             }
 
-            Button(action: {
-                HybridPlaybackCoordinator.shared.wakeSpotifyApp()
-                Task {
-                    try? await Task.sleep(for: .milliseconds(800))
-                    await playerStore.connect()
-                    await loadHomeData()
+            HStack(spacing: 12) {
+                Button(action: {
+                    HybridPlaybackCoordinator.shared.wakeSpotifyApp()
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(800))
+                        await playerStore.connect()
+                        await loadHomeData()
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.circle.fill")
+                        Text("Wake Spotify")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(theme.activeAccent)
+                    .clipShape(Capsule())
+                    .shadow(color: theme.activeAccent.opacity(0.35), radius: 12, x: 0, y: 6)
                 }
-            }) {
-                HStack(spacing: 8) {
-                    Image(systemName: "play.circle.fill")
-                    Text("Wake & Connect Spotify")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                .buttonStyle(.plain)
+
+                Button(action: {
+                    Task {
+                        try? await libraryStore.authorizeFullLibrary()
+                        await loadHomeData()
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "person.crop.circle.badge.plus")
+                        Text("Sync Library")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundColor(theme.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Capsule())
                 }
-                .foregroundColor(.black)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(theme.activeAccent)
-                .clipShape(Capsule())
-                .shadow(color: theme.activeAccent.opacity(0.35), radius: 12, x: 0, y: 6)
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -328,7 +354,13 @@ public struct HomeView: View {
     private func loadHomeData() async {
         await playerStore.connect()
         await libraryStore.loadLibrary()
-        if recentTracks.isEmpty {
+        updateRecentTracks()
+    }
+
+    private func updateRecentTracks() {
+        if !libraryStore.recentlyPlayed.isEmpty {
+            self.recentTracks = libraryStore.recentlyPlayed
+        } else if !libraryStore.savedTracks.isEmpty {
             self.recentTracks = libraryStore.savedTracks
         }
     }

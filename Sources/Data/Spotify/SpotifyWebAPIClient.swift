@@ -162,24 +162,27 @@ public actor SpotifyWebAPIClient {
 
     // MARK: - Library & Saved Tracks
 
-    public func getSavedTracks(limit: Int = 10, offset: Int = 0) async throws -> [TrackItem] {
+    public func getSavedTracks(limit: Int = 50, offset: Int = 0) async throws -> [TrackItem] {
         guard try canMakeRequest() else { return [] }
-        let safeLimit = min(max(1, limit), 10) // 10 max in Dev Mode
+        let safeLimit = min(max(1, limit), 50)
         let endpoint = "me/tracks?limit=\(safeLimit)&offset=\(offset)"
         let data = try await performRequest(endpoint: endpoint, method: "GET")
 
         let response = try JSONDecoder().decode(WebSavedTracksResponse.self, from: data)
         return (response.items ?? []).compactMap { (item: WebSavedTrackItem) -> TrackItem? in
-            guard let track = item.track else { return nil }
+            guard let track = item.track,
+                  let id = track.id,
+                  let uri = track.uri,
+                  let name = track.name else { return nil }
             let artworkURL = parseURL(track.album?.images?.first?.url)
             return TrackItem(
-                id: track.id,
-                uri: track.uri,
-                title: track.name,
-                artistName: track.artists?.map(\.name).joined(separator: ", ") ?? "Unknown Artist",
+                id: id,
+                uri: uri,
+                title: name,
+                artistName: track.artists?.compactMap(\.name).joined(separator: ", ") ?? "Unknown Artist",
                 albumName: track.album?.name ?? "Unknown Album",
                 artworkURL: artworkURL,
-                durationMs: track.durationMs,
+                durationMs: track.durationMs ?? 0,
                 isExplicit: track.explicit ?? false,
                 isSaved: true
             )
@@ -216,18 +219,20 @@ public actor SpotifyWebAPIClient {
 
     // MARK: - Playlists (2026 Dev Mode /items schema)
 
-    public func getPlaylists(limit: Int = 10, offset: Int = 0) async throws -> [PlaylistSummary] {
+    public func getPlaylists(limit: Int = 50, offset: Int = 0) async throws -> [PlaylistSummary] {
         guard try canMakeRequest() else { return [] }
-        let endpoint = "me/playlists?limit=\(min(limit, 10))&offset=\(offset)"
+        let safeLimit = min(max(1, limit), 50)
+        let endpoint = "me/playlists?limit=\(safeLimit)&offset=\(offset)"
         let data = try await performRequest(endpoint: endpoint, method: "GET")
 
         let response = try JSONDecoder().decode(WebPlaylistsResponse.self, from: data)
-        return (response.items ?? []).map { item in
+        return (response.items ?? []).compactMap { item in
+            guard let id = item.id, let name = item.name else { return nil }
             let imageURL = parseURL(item.images?.first?.url)
             return PlaylistSummary(
-                id: item.id,
-                uri: item.uri,
-                name: item.name,
+                id: id,
+                uri: item.uri ?? "spotify:playlist:\(id)",
+                name: name,
                 ownerName: item.owner?.displayName ?? "Spotify",
                 totalItems: item.items?.total ?? item.tracks?.total ?? 0,
                 imageURL: imageURL
@@ -238,22 +243,25 @@ public actor SpotifyWebAPIClient {
     public func getPlaylistItems(playlistId: String, offset: Int = 0) async throws -> [TrackItem] {
         guard try canMakeRequest() else { return [] }
         // 2026 Dev Mode renamed /v1/playlists/{id}/tracks -> /v1/playlists/{id}/items
-        let endpoint = "playlists/\(playlistId)/items?limit=10&offset=\(offset)"
+        let endpoint = "playlists/\(playlistId)/items?limit=50&offset=\(offset)"
         let data = try await performRequest(endpoint: endpoint, method: "GET")
 
         let response = try JSONDecoder().decode(WebPlaylistItemsResponse.self, from: data)
         return (response.items ?? []).compactMap { (itemWrapper: WebPlaylistItemWrapper) -> TrackItem? in
             // Inside PlaylistItem, track was renamed to item
-            guard let track = itemWrapper.item ?? itemWrapper.track else { return nil }
+            guard let track = itemWrapper.item ?? itemWrapper.track,
+                  let id = track.id,
+                  let uri = track.uri,
+                  let name = track.name else { return nil }
             let artworkURL = parseURL(track.album?.images?.first?.url)
             return TrackItem(
-                id: track.id,
-                uri: track.uri,
-                title: track.name,
-                artistName: track.artists?.map(\.name).joined(separator: ", ") ?? "Unknown Artist",
+                id: id,
+                uri: uri,
+                title: name,
+                artistName: track.artists?.compactMap(\.name).joined(separator: ", ") ?? "Unknown Artist",
                 albumName: track.album?.name ?? "Unknown Album",
                 artworkURL: artworkURL,
-                durationMs: track.durationMs,
+                durationMs: track.durationMs ?? 0,
                 isExplicit: track.explicit ?? false,
                 isSaved: false
             )
@@ -268,15 +276,16 @@ public actor SpotifyWebAPIClient {
         let data = try await performRequest(endpoint: endpoint, method: "GET")
 
         let track = try JSONDecoder().decode(WebTrack.self, from: data)
+        guard let trackId = track.id, let uri = track.uri, let name = track.name else { return nil }
         let artworkURL = parseURL(track.album?.images?.first?.url)
         return TrackItem(
-            id: track.id,
-            uri: track.uri,
-            title: track.name,
-            artistName: track.artists?.map(\.name).joined(separator: ", ") ?? "Unknown Artist",
+            id: trackId,
+            uri: uri,
+            title: name,
+            artistName: track.artists?.compactMap(\.name).joined(separator: ", ") ?? "Unknown Artist",
             albumName: track.album?.name ?? "Unknown Album",
             artworkURL: artworkURL,
-            durationMs: track.durationMs,
+            durationMs: track.durationMs ?? 0,
             isExplicit: track.explicit ?? false,
             isSaved: false
         )
@@ -386,10 +395,10 @@ public struct WebPlaybackStateResponse: Codable, Sendable {
 }
 
 public struct WebTrack: Codable, Sendable {
-    public let id: String
-    public let uri: String
-    public let name: String
-    public let durationMs: Int
+    public let id: String?
+    public let uri: String?
+    public let name: String?
+    public let durationMs: Int?
     public let explicit: Bool?
     public let artists: [WebArtist]?
     public let album: WebAlbum?
@@ -403,7 +412,7 @@ public struct WebTrack: Codable, Sendable {
 
 public struct WebArtist: Codable, Sendable {
     public let id: String?
-    public let name: String
+    public let name: String?
 }
 
 public struct WebAlbum: Codable, Sendable {
@@ -413,7 +422,7 @@ public struct WebAlbum: Codable, Sendable {
 }
 
 public struct WebImage: Codable, Sendable {
-    public let url: String
+    public let url: String?
     public let height: Int?
     public let width: Int?
 }
@@ -457,9 +466,9 @@ public struct WebPlaylistsResponse: Codable, Sendable {
 }
 
 public struct WebPlaylistRaw: Codable, Sendable {
-    public let id: String
-    public let uri: String
-    public let name: String
+    public let id: String?
+    public let uri: String?
+    public let name: String?
     public let images: [WebImage]?
     public let owner: WebOwner?
     public let items: WebPagingTotal?

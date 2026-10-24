@@ -11,6 +11,7 @@ import SwiftUI
 public enum LibrarySection: String, CaseIterable, Identifiable {
     case playlists = "Playlists"
     case likedSongs = "Liked Songs"
+    case recent = "Recent"
     case offlineLyrics = "Offline Lyrics"
 
     public var id: String { rawValue }
@@ -131,22 +132,157 @@ public struct LibraryView: View {
     private var contentSection: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 12) {
-                switch selectedSection {
-                case .playlists:
-                    ForEach(libraryStore.playlists) { playlist in
-                        playlistRow(playlist)
+                if libraryStore.isLoading {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: theme.activeAccent))
+                            .scaleEffect(1.2)
+                        Text("Syncing with Spotify...")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(theme.textMuted)
                     }
-                case .likedSongs:
-                    ForEach(libraryStore.savedTracks) { track in
-                        trackRow(track)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+                } else {
+                    switch selectedSection {
+                    case .playlists:
+                        if libraryStore.playlists.isEmpty {
+                            emptyLibraryCard(
+                                title: "No Playlists Loaded",
+                                subtitle: "Authorize Spotify Web access to view your private and followed playlists.",
+                                showConnectButton: true
+                            )
+                            if !libraryStore.recentlyPlayed.isEmpty {
+                                recentlyPlayedFallbackList
+                            }
+                        } else {
+                            ForEach(libraryStore.playlists) { playlist in
+                                playlistRow(playlist)
+                            }
+                        }
+                    case .likedSongs:
+                        if libraryStore.savedTracks.isEmpty {
+                            emptyLibraryCard(
+                                title: "No Liked Songs Loaded",
+                                subtitle: "Connect your Spotify account to synchronize your favorite tracks.",
+                                showConnectButton: true
+                            )
+                            if !libraryStore.recentlyPlayed.isEmpty {
+                                recentlyPlayedFallbackList
+                            }
+                        } else {
+                            ForEach(libraryStore.savedTracks) { track in
+                                trackRow(track)
+                            }
+                        }
+                    case .recent:
+                        if libraryStore.recentlyPlayed.isEmpty {
+                            emptyLibraryCard(
+                                title: "No Recent Tracks",
+                                subtitle: "Play any track on Spotify or in LineriOS to build your local listening history.",
+                                showConnectButton: false
+                            )
+                        } else {
+                            ForEach(libraryStore.recentlyPlayed) { track in
+                                trackRow(track)
+                            }
+                        }
+                    case .offlineLyrics:
+                        offlineLyricsInfoView
                     }
-                case .offlineLyrics:
-                    offlineLyricsInfoView
                 }
 
                 Color.clear.frame(height: 120)
             }
         }
+    }
+
+    private var recentlyPlayedFallbackList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("RECENTLY PLAYED")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(theme.textMuted)
+                .padding(.top, 16)
+                .padding(.leading, 4)
+
+            ForEach(libraryStore.recentlyPlayed) { track in
+                trackRow(track)
+            }
+        }
+    }
+
+    private func emptyLibraryCard(title: String, subtitle: String, showConnectButton: Bool) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "music.note.list")
+                .font(.system(size: 36))
+                .foregroundColor(theme.activeAccent.opacity(0.8))
+                .padding(.top, 8)
+
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(theme.textPrimary)
+
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.textMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+            }
+
+            HStack(spacing: 10) {
+                if showConnectButton {
+                    Button {
+                        Task {
+                            try? await libraryStore.authorizeFullLibrary()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.open.fill")
+                            Text("Connect Spotify Account")
+                        }
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(theme.activeAccent)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    Task {
+                        await libraryStore.loadLibrary()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Reload")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(theme.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.40))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        }
+        .padding(.top, 16)
     }
 
     private func playlistRow(_ playlist: PlaylistSummary) -> some View {
