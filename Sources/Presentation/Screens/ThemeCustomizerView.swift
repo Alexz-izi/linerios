@@ -10,17 +10,15 @@
 import SwiftUI
 
 public struct ThemeCustomizerView: View {
-    @Bindable var themeManager: ThemeManager
+    @Bindable private var themeManager = ThemeManager.shared
     @Environment(\.dismiss) private var dismiss
     
-    public init(themeManager: ThemeManager) {
-        self.themeManager = themeManager
-    }
+    public init() {}
     
     public var body: some View {
         NavigationStack {
             ZStack {
-                AdaptiveAtmosphereMeshView(themeManager: themeManager)
+                AdaptiveAtmosphereMeshView()
                     .ignoresSafeArea()
                 
                 ScrollView {

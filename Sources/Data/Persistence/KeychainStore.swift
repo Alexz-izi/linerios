@@ -102,6 +102,10 @@ public final class KeychainStore: @unchecked Sendable {
         return expiry.timeIntervalSinceNow > 60 // 60s buffer before expiry
     }
 
+    public func hasValidCredentials() -> Bool {
+        hasConfiguredClientId()
+    }
+
     private func deleteItem(forKey account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

@@ -19,6 +19,7 @@ public final class PlayerStore {
     public var connectionState: PlaybackConnectionState = .disconnected
     public var isScrubbing: Bool = false
     public var scrubberPositionMs: Double = 0.0
+    public var isHUDOverlayVisible: Bool = false
 
     private let coordinator: PlaybackControllerProtocol
 
@@ -192,6 +193,14 @@ public final class PlayerStore {
             } catch {
                 RingBufferLogger.shared.log(level: .warn, category: "PlayerStore", message: "Cycle repeat failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    public func disconnectAndClearCredentials() {
+        Task {
+            try? await coordinator.disconnect()
+            KeychainStore.shared.clearAuthTokens()
+            KeychainStore.shared.delete(forKey: .clientId)
         }
     }
 

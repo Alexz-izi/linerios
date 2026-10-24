@@ -20,16 +20,9 @@ public final class AppEnvironment {
     public let libraryStore: LibraryStore
     public let searchStore: SearchStore
     
-    public var selectedTab: TabIndex = .home
+    public var selectedTab: Int = 0
     public var isNowPlayingPresented: Bool = false
     public var isLyricsPresented: Bool = false
-    
-    public enum TabIndex: Int, Hashable {
-        case home = 0
-        case search = 1
-        case library = 2
-        case settings = 3
-    }
     
     private init() {
         self.themeManager = ThemeManager.shared
@@ -44,25 +37,19 @@ public final class AppEnvironment {
     private func setupBindings() {
         // Track changes update palette extraction and fetch lyrics
         _ = withObservationTracking {
-            playerStore.currentTrack
+            playerStore.currentSnapshot
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 self.setupBindings()
-                guard let track = self.playerStore.currentTrack else { return }
+                guard let snapshot = self.playerStore.currentSnapshot else { return }
                 
                 // Fetch lyrics for new track
-                await self.lyricsStore.loadLyrics(
-                    trackId: track.id,
-                    trackName: track.name,
-                    artistName: track.artistName,
-                    albumName: track.albumName,
-                    durationMs: track.durationMs
-                )
+                self.lyricsStore.loadLyrics(for: snapshot)
                 
                 // Extract palette for atmosphere mesh
-                if let urlString = track.artworkUrl, let url = URL(string: urlString) {
-                    await self.themeManager.extractDynamicPalette(from: url)
+                if let url = snapshot.artworkURL {
+                    self.themeManager.updateArtwork(url: url)
                 }
             }
         }

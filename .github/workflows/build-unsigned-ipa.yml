@@ -74,6 +74,12 @@ jobs:
             CODE_SIGNING_ALLOWED=YES \
             AD_HOC_CODE_SIGNING_ALLOWED=YES 2>&1 | tee xcodebuild.log
 
+      - name: Print Build Errors on Failure
+        if: failure()
+        run: |
+          echo "==== XCODEBUILD FAILURE LOG SUMMARY ===="
+          grep -E "error:" xcodebuild.log | head -n 50 || tail -n 60 xcodebuild.log
+
       - name: Upload Build Log on Failure
         if: failure()
         uses: actions/upload-artifact@v4

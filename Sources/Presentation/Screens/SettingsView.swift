@@ -10,9 +10,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 public struct SettingsView: View {
-    @Bindable var themeManager: ThemeManager
-    let playerStore: PlayerStore
-    let lyricsStore: LyricsStore
+    @Bindable private var themeManager = ThemeManager.shared
+    @Bindable private var playerStore = PlayerStore.shared
+    @Bindable private var lyricsStore = LyricsStore.shared
     
     @State private var showingCustomizer = false
     @State private var showingExportSheet = false
@@ -24,16 +24,12 @@ public struct SettingsView: View {
     @State private var paletteCount: Int = 0
     @State private var databaseBytes: Int64 = 0
     
-    public init(themeManager: ThemeManager, playerStore: PlayerStore, lyricsStore: LyricsStore) {
-        self.themeManager = themeManager
-        self.playerStore = playerStore
-        self.lyricsStore = lyricsStore
-    }
+    public init() {}
     
     public var body: some View {
         NavigationStack {
             ZStack {
-                AdaptiveAtmosphereMeshView(themeManager: themeManager)
+                AdaptiveAtmosphereMeshView()
                     .ignoresSafeArea()
                 
                 ScrollView {
@@ -62,7 +58,7 @@ public struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingCustomizer) {
-                ThemeCustomizerView(themeManager: themeManager)
+                ThemeCustomizerView()
             }
             .fileImporter(
                 isPresented: $showingImportPicker,

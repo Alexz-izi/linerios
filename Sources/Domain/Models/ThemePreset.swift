@@ -24,6 +24,8 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
         }
     }
 
+    public var name: String { displayName }
+
     public var bgPrimary: Color {
         switch self {
         case .midnight:   return Color(hex: "#070913")
@@ -68,6 +70,8 @@ public enum ThemePreset: String, CaseIterable, Identifiable, Sendable, Codable {
         case .afterhours: return Color(hex: "#FB7185") // Neon Rose
         }
     }
+
+    public var accent: Color { accentPrimary }
 
     public var meshNode2: Color {
         switch self {

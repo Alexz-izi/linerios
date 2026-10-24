@@ -9,6 +9,7 @@
 import Foundation
 import SwiftUI
 import Observation
+import QuartzCore
 
 @MainActor
 @Observable
@@ -73,7 +74,56 @@ public final class LyricsStore {
         }
     }
 
-    // MARK: - Active Line & Syllable Resolution
+    public func loadLyrics(trackId: String, trackName: String, artistName: String, albumName: String, durationMs: Int) async {
+        let snapshot = PlaybackSnapshot(
+            trackURI: trackId,
+            title: trackName,
+            artist: artistName,
+            album: albumName,
+            artworkURL: nil,
+            durationMs: durationMs,
+            anchorPositionMs: 0,
+            anchorMonotonicTime: CACurrentMediaTime(),
+            isPlaying: true,
+            shuffleEnabled: false,
+            repeatMode: .off,
+            activeDeviceName: "iPhone 14 Pro"
+        )
+        loadLyrics(for: snapshot)
+    }
+
+    public func clearLocalCache() async {
+        await SQLiteCacheActor.shared.clearLyrics()
+        self.lyrics = nil
+        self.activeLineIndex = nil
+        self.activeTrackURI = nil
+    }
+
+    // MARK: - Manual Offset Timing Adjustment
+
+    public func adjustOffset(deltaMs: Int) {
+        self.userOffsetMs += deltaMs
+        self.clock.setUserOffset(ms: userOffsetMs)
+
+        if let uri = activeTrackURI {
+            Task {
+                await SQLiteCacheActor.shared.updateUserOffset(trackURI: uri, offsetMs: userOffsetMs)
+            }
+        }
+    }
+
+    public func resetOffset() {
+        self.userOffsetMs = 0
+        self.clock.setUserOffset(ms: 0)
+
+        if let uri = activeTrackURI {
+            Task {
+                await SQLiteCacheActor.shared.updateUserOffset(trackURI: uri, offsetMs: 0)
+            }
+        }
+    }
+
+    // MARK: - Real-Time Resolution (120Hz)
 
     private func resolveActiveLine(for timeMs: Int) {
         guard let lines = lyrics?.lines, !lines.isEmpty else {
@@ -81,66 +131,36 @@ public final class LyricsStore {
             return
         }
 
-        // Fast binary search to find active line
+        // Binary search for active line interval: startTimeMs <= timeMs < next.startTimeMs
         var low = 0
         var high = lines.count - 1
-        var candidateIndex: Int?
+        var foundIndex: Int?
 
         while low <= high {
             let mid = (low + high) / 2
             let line = lines[mid]
 
-            if timeMs >= line.startTimeMs && timeMs < line.endTimeMs {
-                candidateIndex = mid
-                break
-            } else if timeMs < line.startTimeMs {
-                high = mid - 1
-            } else {
-                candidateIndex = mid // Best preceding line
+            if line.startTimeMs <= timeMs {
+                if mid == lines.count - 1 || lines[mid + 1].startTimeMs > timeMs {
+                    foundIndex = mid
+                    break
+                }
                 low = mid + 1
+            } else {
+                high = mid - 1
             }
         }
 
-        if self.activeLineIndex != candidateIndex {
-            self.activeLineIndex = candidateIndex
-        }
+        self.activeLineIndex = foundIndex
     }
 
-    // MARK: - Visual Helpers
+    // MARK: - Syllable-Level Karaoke Calculation
 
-    public func blurForLine(index: Int) -> Double {
-        guard let active = activeLineIndex else { return 0.0 }
-        let distance = abs(index - active)
-        if distance == 0 { return 0.0 }
-        return min(Double(distance) * 1.5, 4.0)
+    public func syllableProgress(for word: LyricWordToken) -> Double {
+        word.progress(at: currentPlaybackTimeMs)
     }
 
-    public func opacityForLine(index: Int) -> Double {
-        guard let active = activeLineIndex else { return 0.7 }
-        let distance = abs(index - active)
-        if distance == 0 { return 1.0 }
-        if distance == 1 { return 0.45 }
-        return 0.25
-    }
-
-    public func progressForWord(_ token: LyricWordToken) -> Double {
-        return token.progress(at: currentPlaybackTimeMs)
-    }
-
-    // MARK: - User Offset Stepper (±100ms)
-
-    public func adjustOffset(by deltaMs: Int) {
-        userOffsetMs += deltaMs
-        clock.setUserOffset(ms: userOffsetMs)
-
-        if let uri = activeTrackURI {
-            Task {
-                try? await repository.updateUserOffset(trackURI: uri, offsetMs: userOffsetMs)
-            }
-        }
-    }
-
-    public func resetOffset() {
-        adjustOffset(by: -userOffsetMs)
+    public func isWordActive(_ word: LyricWordToken) -> Bool {
+        currentPlaybackTimeMs >= word.startTimeMs && currentPlaybackTimeMs < word.endTimeMs
     }
 }

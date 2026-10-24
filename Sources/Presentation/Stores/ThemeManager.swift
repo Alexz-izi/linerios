@@ -20,6 +20,12 @@ public final class ThemeManager {
         }
     }
 
+    public var selectedPreset: ThemePreset {
+        get { currentPreset }
+        set { currentPreset = newValue }
+    }
+
+    public var specularRimIntensity: Double = 0.25
     public var extractedPalette: ExtractedPalette?
     public var useAdaptiveAtmosphere: Bool = true
 
@@ -32,6 +38,10 @@ public final class ThemeManager {
            let preset = ThemePreset(rawValue: saved) {
             self.currentPreset = preset
         }
+    }
+
+    public func selectPreset(_ preset: ThemePreset) {
+        self.currentPreset = preset
     }
 
     // MARK: - Dynamic Palette Resolution
@@ -63,6 +73,10 @@ public final class ThemeManager {
                 RingBufferLogger.shared.log(level: .warn, category: "Theme", message: "Palette extraction skipped: \(error.localizedDescription)")
             }
         }
+    }
+
+    public func extractDynamicPalette(from url: URL) async {
+        updateArtwork(url: url)
     }
 
     // MARK: - Active Mesh Color Tokens
