@@ -24,7 +24,7 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
     public var onSnapshotUpdate: ((PlaybackSnapshot) -> Void)?
     public var onConnectionStateChange: ((PlaybackConnectionState) -> Void)?
 
-    private var appRemote: SPTAppRemote?
+    public private(set) var appRemote: SPTAppRemote?
     private var isSubscribedToPlayer: Bool = false
     private var lastObservedURI: String?
 
@@ -54,6 +54,51 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
         }
         guard let appRemote = self.appRemote else { return }
         appRemote.authorizeAndPlayURI(uri)
+    }
+
+    public func handleAuthCallback(_ url: URL) -> Bool {
+        if appRemote == nil {
+            configure()
+        }
+        guard let appRemote = self.appRemote else { return false }
+
+        if let params = appRemote.authorizationParameters(from: url) {
+            if let token = params[SPTAppRemoteAccessTokenKey], !token.isEmpty {
+                appRemote.connectionParameters.accessToken = token
+                KeychainStore.shared.set(string: token, forKey: .accessToken)
+                Task { @MainActor in
+                    do {
+                        try await self.connect()
+                    } catch {
+                        RingBufferLogger.shared.log(
+                            level: .warn,
+                            category: "AppRemote",
+                            message: "Post-auth connection failed: \(error.localizedDescription)"
+                        )
+                    }
+                }
+                return true
+            }
+        }
+
+        // Manual fragment fallback in case Spotify returns #access_token=...
+        if let fragment = url.fragment, fragment.contains("access_token") {
+            let items = fragment.components(separatedBy: "&")
+            for item in items {
+                let pair = item.components(separatedBy: "=")
+                if pair.count == 2 && pair[0] == "access_token" {
+                    let token = pair[1]
+                    appRemote.connectionParameters.accessToken = token
+                    KeychainStore.shared.set(string: token, forKey: .accessToken)
+                    Task { @MainActor in
+                        try? await self.connect()
+                    }
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     public func connect() async throws {

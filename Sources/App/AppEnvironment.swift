@@ -57,7 +57,10 @@ public final class AppEnvironment {
     
     public func handleOpenURL(_ url: URL) {
         if url.scheme == "linerios" && url.host == "auth-callback" {
-            SpotifyPKCEAuthenticator.shared.handleCallbackURL(url)
+            let handledByRemote = SpotifyAppRemoteAdapter.shared.handleAuthCallback(url)
+            if !handledByRemote {
+                SpotifyPKCEAuthenticator.shared.handleCallbackURL(url)
+            }
         }
     }
 }

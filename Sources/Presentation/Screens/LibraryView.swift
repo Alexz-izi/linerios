@@ -193,7 +193,7 @@ public struct LibraryView: View {
 
     private func trackRow(_ track: TrackItem) -> some View {
         Button(action: {
-            playerStore.playTrack(uri: track.uri)
+            playerStore.playTrack(track)
         }) {
             HStack(spacing: 12) {
                 if let url = track.artworkURL {
@@ -271,21 +271,40 @@ public struct LibraryView: View {
                         .foregroundColor(theme.textMuted)
                 }
 
-                HStack(spacing: 16) {
+                HStack(spacing: 12) {
+                    Button(action: {
+                        playerStore.playTrack(uri: playlist.uri)
+                        selectedPlaylist = nil
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                            Text("Play")
+                        }
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(theme.bgPrimary)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(theme.activeAccent)
+                        .clipShape(Capsule())
+                    }
+
                     Button(action: {
                         libraryStore.preWarmLyrics(for: playlist.id)
                         selectedPlaylist = nil
                     }) {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.down.circle.fill")
-                            Text("Cache Lyrics for Playlist")
+                            Text("Cache Lyrics")
                         }
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(theme.bgPrimary)
-                        .padding(.horizontal, 20)
+                        .foregroundColor(theme.textPrimary)
+                        .padding(.horizontal, 18)
                         .padding(.vertical, 12)
-                        .background(theme.activeAccent)
+                        .background(theme.currentPreset.glassTintColor)
                         .clipShape(Capsule())
+                        .overlay(
+                            Capsule().stroke(theme.specularRimColor.opacity(0.3), lineWidth: 1)
+                        )
                     }
                 }
 

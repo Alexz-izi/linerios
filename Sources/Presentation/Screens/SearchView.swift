@@ -205,7 +205,7 @@ public struct SearchView: View {
                 Spacer()
 
                 Button(action: {
-                    playerStore.playTrack(uri: track.uri)
+                    playerStore.playTrack(track)
                 }) {
                     Image(systemName: "play.fill")
                         .font(.system(size: 18))
@@ -229,7 +229,7 @@ public struct SearchView: View {
 
     private func trackRow(_ track: TrackItem) -> some View {
         Button(action: {
-            playerStore.playTrack(uri: track.uri)
+            playerStore.playTrack(track)
         }) {
             HStack(spacing: 12) {
                 if let url = track.artworkURL {

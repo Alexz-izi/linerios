@@ -115,7 +115,7 @@ public struct HomeView: View {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     ForEach(recentTracks.prefix(6)) { track in
                         Button(action: {
-                            playerStore.playTrack(uri: track.uri)
+                            playerStore.playTrack(track)
                         }) {
                             HStack(spacing: 10) {
                                 if let url = track.artworkURL {
@@ -235,7 +235,7 @@ public struct HomeView: View {
                 LazyHStack(spacing: 14) {
                     ForEach(recentTracks) { track in
                         Button(action: {
-                            playerStore.playTrack(uri: track.uri)
+                            playerStore.playTrack(track)
                         }) {
                             VStack(alignment: .leading, spacing: 6) {
                                 if let url = track.artworkURL {
@@ -283,7 +283,7 @@ public struct HomeView: View {
             LazyVStack(spacing: 8) {
                 ForEach(libraryStore.savedTracks.prefix(8)) { track in
                     Button(action: {
-                        playerStore.playTrack(uri: track.uri)
+                        playerStore.playTrack(track)
                     }) {
                         HStack(spacing: 12) {
                             if let url = track.artworkURL {

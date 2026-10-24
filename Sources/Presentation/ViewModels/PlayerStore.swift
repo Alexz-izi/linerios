@@ -138,7 +138,44 @@ public final class PlayerStore {
         }
     }
 
+    public func playTrack(_ track: TrackItem) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        // Immediate optimistic snapshot so UI updates with zero latency
+        let now = CACurrentMediaTime()
+        let optimisticSnapshot = PlaybackSnapshot(
+            trackURI: track.uri,
+            title: track.title,
+            artist: track.artistName,
+            album: track.albumName,
+            artworkURL: track.artworkURL,
+            durationMs: track.durationMs,
+            anchorPositionMs: 0,
+            anchorMonotonicTime: now,
+            isPlaying: true,
+            shuffleEnabled: currentSnapshot?.shuffleEnabled ?? false,
+            repeatMode: currentSnapshot?.repeatMode ?? .off,
+            activeDeviceName: currentSnapshot?.activeDeviceName ?? "iPhone 14 Pro"
+        )
+        self.currentSnapshot = optimisticSnapshot
+        self.scrubberPositionMs = 0
+
+        // Immediately update dynamic palette in theme
+        if let url = track.artworkURL {
+            ThemeManager.shared.updateArtwork(url: url)
+        }
+
+        Task {
+            do {
+                try await coordinator.play(uri: track.uri)
+            } catch {
+                RingBufferLogger.shared.log(level: .warn, category: "PlayerStore", message: "Play track failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     public func playTrack(uri: String) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         Task {
             do {
                 try await coordinator.play(uri: uri)

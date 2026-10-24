@@ -78,31 +78,59 @@ public final class HybridPlaybackCoordinator: PlaybackControllerProtocol {
     }
 
     public func play(uri: String? = nil) async throws {
-        if connectionState == .connectedLocalIPC {
+        // Stage 1: Fast local IPC socket if active and connected
+        if connectionState == .connectedLocalIPC, let remote = appRemoteAdapter.appRemote, remote.isConnected {
             do {
                 try await appRemoteAdapter.play(uri: uri)
                 return
             } catch {
-                RingBufferLogger.shared.log(level: .warn, category: "Coordinator", message: "IPC play failed. Retrying via Web API.")
+                RingBufferLogger.shared.log(
+                    level: .warn,
+                    category: "Coordinator",
+                    message: "IPC play failed (\(error.localizedDescription)). Transitioning to Web API / App Remote wake."
+                )
             }
         }
 
-        // Cloud Web API Fallback
+        // Stage 2: Spotify Web API Connect if an active session exists
+        var webAPISucceeded = false
         do {
             if let uri = uri, !uri.isEmpty {
                 try await webApiClient.play(uri: uri)
             } else {
                 try await webApiClient.resume()
             }
+            webAPISucceeded = true
+
+            // Immediately poll for current state to synchronize UI
+            Task {
+                try? await Task.sleep(for: .milliseconds(400))
+                if let snapshot = try? await self.webApiClient.getCurrentPlaybackState() {
+                    await MainActor.run {
+                        self.currentSnapshot = snapshot
+                        self.onSnapshotUpdate?(snapshot)
+                        self.clock.updateAnchor(
+                            positionMs: snapshot.anchorPositionMs,
+                            monotonicTime: snapshot.anchorMonotonicTime,
+                            isPlaying: snapshot.isPlaying
+                        )
+                    }
+                }
+            }
         } catch {
             RingBufferLogger.shared.log(
                 level: .warn,
                 category: "Coordinator",
-                message: "Web API play failed (\(error.localizedDescription)). Invoking Stage 3 Spotify app wake."
+                message: "Web API play failed (\(error.localizedDescription)). Invoking Stage 3 Spotify App Remote wake."
             )
-            // Stage 3: Direct Spotify App Wake-Up Fallback
-            await wakeAndPlay(uri: uri)
         }
+
+        if webAPISucceeded {
+            return
+        }
+
+        // Stage 3: Direct Spotify App Remote Wake & Handshake
+        await wakeAndPlay(uri: uri)
     }
 
     public func pause() async throws {
@@ -180,38 +208,13 @@ public final class HybridPlaybackCoordinator: PlaybackControllerProtocol {
     // MARK: - Stage 3: Local App Wake-up
 
     public func wakeSpotifyApp() {
-        guard let url = URL(string: "spotify-action://") ?? URL(string: "spotify://") else { return }
-        UIApplication.shared.open(url, options: [:]) { success in
-            if success {
-                RingBufferLogger.shared.log(level: .info, category: "Coordinator", message: "Triggered Stage 3 Spotify URL scheme wake-up")
-            }
-        }
+        appRemoteAdapter.authorizeAndPlayURI("")
     }
 
     public func wakeAndPlay(uri: String?) async {
-        let targetURL: URL?
-        if let uri = uri, !uri.isEmpty {
-            targetURL = URL(string: uri)
-        } else {
-            targetURL = URL(string: "spotify:play") ?? URL(string: "spotify://")
-        }
-
-        guard let url = targetURL else { return }
-
         await MainActor.run {
-            UIApplication.shared.open(url, options: [:]) { [weak self] success in
-                if success {
-                    RingBufferLogger.shared.log(
-                        level: .info,
-                        category: "Coordinator",
-                        message: "Opened Spotify via URL scheme: \(url)"
-                    )
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(900))
-                        try? await self?.connect()
-                    }
-                }
-            }
+            let trackURI = uri ?? ""
+            appRemoteAdapter.authorizeAndPlayURI(trackURI)
         }
     }
 
