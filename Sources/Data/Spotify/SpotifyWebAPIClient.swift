@@ -59,12 +59,12 @@ public actor SpotifyWebAPIClient {
         )
 
         return PlaybackSnapshot(
-            trackURI: item.uri,
-            title: item.name,
-            artist: item.artists?.map(\.name).joined(separator: ", ") ?? "Unknown Artist",
+            trackURI: item.uri ?? "",
+            title: item.name ?? "Unknown Track",
+            artist: item.artists?.compactMap(\.name).joined(separator: ", ") ?? "Unknown Artist",
             album: item.album?.name ?? "Unknown Album",
             artworkURL: artworkURL,
-            durationMs: item.durationMs,
+            durationMs: item.durationMs ?? 0,
             anchorPositionMs: response.progressMs ?? 0,
             anchorMonotonicTime: now,
             isPlaying: response.isPlaying ?? false,
@@ -144,16 +144,17 @@ public actor SpotifyWebAPIClient {
         let response = try JSONDecoder().decode(WebSearchResponse.self, from: data)
         let tracks = response.tracks?.items ?? []
 
-        return tracks.map { track in
+        return tracks.compactMap { track in
+            guard let id = track.id, let uri = track.uri, let name = track.name else { return nil }
             let artworkURL = parseURL(track.album?.images?.first?.url)
             return TrackItem(
-                id: track.id,
-                uri: track.uri,
-                title: track.name,
-                artistName: track.artists?.map(\.name).joined(separator: ", ") ?? "Unknown Artist",
+                id: id,
+                uri: uri,
+                title: name,
+                artistName: track.artists?.compactMap(\.name).joined(separator: ", ") ?? "Unknown Artist",
                 albumName: track.album?.name ?? "Unknown Album",
                 artworkURL: artworkURL,
-                durationMs: track.durationMs,
+                durationMs: track.durationMs ?? 0,
                 isExplicit: track.explicit ?? false,
                 isSaved: false
             )
