@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-ipa:
     runs-on: macos-latest
@@ -78,7 +81,18 @@ jobs:
         if: failure()
         run: |
           echo "==== XCODEBUILD FAILURE LOG SUMMARY ===="
-          grep -E "error:" xcodebuild.log | head -n 50 || tail -n 60 xcodebuild.log
+          grep -E "error:" xcodebuild.log | head -n 50 || true
+          echo "==== LAST 50 LINES OF LOG ===="
+          tail -n 50 xcodebuild.log || true
+          
+          # Attempt to push failure log to debug branch if permissions allow
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git checkout -B ci-debug || true
+          grep -E "error:" xcodebuild.log > build_error_summary.txt || tail -n 100 xcodebuild.log > build_error_summary.txt
+          git add build_error_summary.txt || true
+          git commit -m "Auto-captured build failure" || true
+          git push -f origin ci-debug || true
 
       - name: Upload Build Log on Failure
         if: failure()

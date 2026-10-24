@@ -8,6 +8,7 @@
 
 import Foundation
 import UIKit
+import QuartzCore
 
 @MainActor
 public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
@@ -64,35 +65,25 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
         appRemote.connectionParameters.accessToken = token
         connectionState = .connecting
 
-        RingBufferLogger.shared.log(
-            level: .info,
-            category: "AppRemote",
-            message: "Initiating local IPC connection to Spotify app"
-        )
-
-        appRemote.connect()
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async {
+                appRemote.connect()
+                // Connection confirmation handled by SPTAppRemoteDelegate callbacks
+                continuation.resume()
+            }
+        }
     }
 
-    public func disconnect() {
+    public func disconnect() async throws {
         guard let appRemote = self.appRemote, appRemote.isConnected else { return }
         appRemote.disconnect()
-        connectionState = .disconnected
-        isSubscribedToPlayer = false
-        RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Disconnected local IPC")
+        self.connectionState = .disconnected
+        self.isSubscribedToPlayer = false
     }
 
-    public func authorizeAndPlayURI(_ uri: String = "") {
-        guard let appRemote = self.appRemote else {
-            configure()
-            self.appRemote?.authorizeAndPlayURI(uri)
-            return
-        }
-        appRemote.authorizeAndPlayURI(uri)
-    }
+    // MARK: - Transport Commands
 
-    // MARK: - Playback Control Commands
-
-    public func play(uri: String? = nil) async throws {
+    public func play(uri: String?) async throws {
         guard let appRemote = self.appRemote, appRemote.isConnected, let playerAPI = appRemote.playerAPI else {
             throw AppRemoteError.notConnected
         }
@@ -103,10 +94,10 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
                 playerAPI.play(uri, asRadio: false) { result, error in
                     let latency = (CACurrentMediaTime() - start) * 1000.0
                     if let error = error {
-                        RingBufferLogger.shared.log(level: .error, category: "AppRemote", message: "Play URI failed: \(error.localizedDescription)", latencyMs: latency)
+                        RingBufferLogger.shared.log(level: .error, category: "AppRemote", message: "Play failed: \(error.localizedDescription)", latencyMs: latency)
                         continuation.resume(throwing: error)
                     } else {
-                        RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Play URI dispatched: \(uri)", latencyMs: latency)
+                        RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Playback started for \(uri)", latencyMs: latency)
                         continuation.resume()
                     }
                 }
@@ -117,7 +108,7 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
                         RingBufferLogger.shared.log(level: .error, category: "AppRemote", message: "Resume failed: \(error.localizedDescription)", latencyMs: latency)
                         continuation.resume(throwing: error)
                     } else {
-                        RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Resumed playback", latencyMs: latency)
+                        RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Playback resumed", latencyMs: latency)
                         continuation.resume()
                     }
                 }
@@ -138,7 +129,7 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
                     RingBufferLogger.shared.log(level: .error, category: "AppRemote", message: "Pause failed: \(error.localizedDescription)", latencyMs: latency)
                     continuation.resume(throwing: error)
                 } else {
-                    RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Paused playback", latencyMs: latency)
+                    RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Playback paused", latencyMs: latency)
                     continuation.resume()
                 }
             }
@@ -158,7 +149,7 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
                     RingBufferLogger.shared.log(level: .error, category: "AppRemote", message: "Skip next failed: \(error.localizedDescription)", latencyMs: latency)
                     continuation.resume(throwing: error)
                 } else {
-                    RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Skipped to next", latencyMs: latency)
+                    RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Skipped to next track", latencyMs: latency)
                     continuation.resume()
                 }
             })
@@ -178,7 +169,7 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
                     RingBufferLogger.shared.log(level: .error, category: "AppRemote", message: "Skip previous failed: \(error.localizedDescription)", latencyMs: latency)
                     continuation.resume(throwing: error)
                 } else {
-                    RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Skipped to previous", latencyMs: latency)
+                    RingBufferLogger.shared.log(level: .info, category: "AppRemote", message: "Skipped to previous track", latencyMs: latency)
                     continuation.resume()
                 }
             })
@@ -272,35 +263,49 @@ public final class SpotifyAppRemoteAdapter: NSObject, ObservableObject {
 
 // MARK: - SPTAppRemoteDelegate
 extension SpotifyAppRemoteAdapter: SPTAppRemoteDelegate {
-    public func appRemoteDidEstablishConnection(_ appRemote: SPTAppRemote) {
-        connectionState = .connectedLocalIPC
-        RingBufferLogger.shared.log(
-            level: .info,
-            category: "AppRemote",
-            message: "Connected to Spotify via local IPC (<15ms latency)"
-        )
-        subscribeToPlayerState()
+    nonisolated public func appRemoteDidEstablishConnection(_ appRemote: SPTAppRemote) {
+        Task { @MainActor in
+            self.connectionState = .connectedLocalIPC
+            RingBufferLogger.shared.log(
+                level: .info,
+                category: "AppRemote",
+                message: "Connected to Spotify via local IPC (<15ms latency)"
+            )
+            self.subscribeToPlayerState()
+        }
     }
 
-    public func appRemote(_ appRemote: SPTAppRemote, didFailConnectionAttemptWithError error: Error?) {
+    nonisolated public func appRemote(_ appRemote: SPTAppRemote, didFailConnectionAttemptWithError error: Error?) {
         let msg = error?.localizedDescription ?? "Connection attempt failed"
-        connectionState = .disconnected
-        RingBufferLogger.shared.log(level: .warn, category: "AppRemote", message: "IPC failed: \(msg)")
+        Task { @MainActor in
+            self.connectionState = .disconnected
+            RingBufferLogger.shared.log(level: .warn, category: "AppRemote", message: "IPC failed: \(msg)")
+        }
     }
 
-    public func appRemote(_ appRemote: SPTAppRemote, didDisconnectWithError error: Error?) {
+    nonisolated public func appRemote(_ appRemote: SPTAppRemote, didDisconnectWithError error: Error?) {
         let msg = error?.localizedDescription ?? "IPC disconnected"
-        connectionState = .disconnected
-        isSubscribedToPlayer = false
-        RingBufferLogger.shared.log(level: .warn, category: "AppRemote", message: "Spotify disconnected: \(msg)")
+        Task { @MainActor in
+            self.connectionState = .disconnected
+            self.isSubscribedToPlayer = false
+            RingBufferLogger.shared.log(level: .warn, category: "AppRemote", message: "Spotify disconnected: \(msg)")
+        }
     }
 }
 
 // MARK: - SPTAppRemotePlayerStateDelegate
 extension SpotifyAppRemoteAdapter: SPTAppRemotePlayerStateDelegate {
-    public func playerStateDidChange(_ playerState: SPTAppRemotePlayerState) {
+    nonisolated public func playerStateDidChange(_ playerState: SPTAppRemotePlayerState) {
         let now = CACurrentMediaTime()
         let track = playerState.track
+        let trackUri = track.uri
+        let trackName = track.name
+        let artistName = track.artist.name
+        let albumName = track.album.name
+        let duration = track.duration
+        let playbackPos = playerState.playbackPosition
+        let isPaused = playerState.isPaused
+        let isShuffling = playerState.playbackOptions.isShuffling
 
         let repeatMode: RepeatMode
         switch playerState.playbackOptions.repeatMode {
@@ -310,25 +315,26 @@ extension SpotifyAppRemoteAdapter: SPTAppRemotePlayerStateDelegate {
         @unknown default: repeatMode = .off
         }
 
-        // Construct high-precision timing snapshot
-        let snapshot = PlaybackSnapshot(
-            trackURI: track.uri,
-            title: track.name,
-            artist: track.artist.name,
-            album: track.album.name,
-            artworkURL: nil, // Extracted on-demand or augmented by Web API
-            durationMs: Int(track.duration),
-            anchorPositionMs: playerState.playbackPosition,
-            anchorMonotonicTime: now,
-            isPlaying: !playerState.isPaused,
-            shuffleEnabled: playerState.playbackOptions.isShuffling,
-            repeatMode: repeatMode,
-            activeDeviceName: "iPhone 14 Pro (Local IPC)"
-        )
+        Task { @MainActor in
+            let snapshot = PlaybackSnapshot(
+                trackURI: trackUri,
+                title: trackName,
+                artist: artistName,
+                album: albumName,
+                artworkURL: nil,
+                durationMs: Int(duration),
+                anchorPositionMs: playbackPos,
+                anchorMonotonicTime: now,
+                isPlaying: !isPaused,
+                shuffleEnabled: isShuffling,
+                repeatMode: repeatMode,
+                activeDeviceName: "iPhone 14 Pro (Local IPC)"
+            )
 
-        self.currentSnapshot = snapshot
-        self.lastObservedURI = track.uri
-        onSnapshotUpdate?(snapshot)
+            self.currentSnapshot = snapshot
+            self.lastObservedURI = trackUri
+            self.onSnapshotUpdate?(snapshot)
+        }
     }
 }
 

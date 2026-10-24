@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import UIKit
 import AuthenticationServices
 import CryptoKit
 
@@ -67,13 +68,7 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
             throw AuthError.invalidURL
         }
 
-        RingBufferLogger.shared.log(
-            level: .info,
-            category: "OAuth",
-            message: "Launching ASWebAuthenticationSession for PKCE flow"
-        )
-
-        let callbackURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+        return try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(
                 url: authURL,
                 callbackURLScheme: Self.callbackScheme
@@ -82,11 +77,20 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
                     continuation.resume(throwing: error)
                     return
                 }
+
                 guard let callbackURL = callbackURL else {
                     continuation.resume(throwing: AuthError.missingCallbackURL)
                     return
                 }
-                continuation.resume(returning: callbackURL)
+
+                Task { @MainActor in
+                    do {
+                        let token = try await self.exchangeCodeForToken(callbackURL: callbackURL)
+                        continuation.resume(returning: token)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
 
             session.presentationContextProvider = self
@@ -94,78 +98,84 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
             self.activeAuthSession = session
             session.start()
         }
-
-        return try await handleCallback(url: callbackURL)
     }
 
-    // MARK: - Token Exchange
+    public func handleCallbackURL(_ url: URL) {
+        // Fallback for custom URL scheme deep links (linerios://auth-callback?code=...)
+        Task {
+            _ = try? await exchangeCodeForToken(callbackURL: url)
+        }
+    }
 
-    public func handleCallback(url: URL) async throws -> String {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+    // MARK: - Token Exchange & Refresh Flow
+
+    public func exchangeCodeForToken(callbackURL: URL) async throws -> String {
+        guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems else {
             throw AuthError.invalidCallback
         }
 
-        let queryItems = components.queryItems ?? []
-        if let error = queryItems.first(where: { $0.name == "error" })?.value {
-            RingBufferLogger.shared.log(level: .error, category: "OAuth", message: "Spotify auth error: \(error)")
-            throw AuthError.spotifyRejected(error)
+        if let errorParam = queryItems.first(where: { $0.name == "error" })?.value {
+            throw AuthError.spotifyRejected(errorParam)
         }
 
         guard let code = queryItems.first(where: { $0.name == "code" })?.value else {
             throw AuthError.missingAuthorizationCode
         }
 
-        let state = queryItems.first(where: { $0.name == "state" })?.value
-        if let expectedState = self.pendingAuthState, state != expectedState {
-            RingBufferLogger.shared.log(level: .error, category: "OAuth", message: "CSRF state verification failed")
+        let returnedState = queryItems.first(where: { $0.name == "state" })?.value
+        guard returnedState == self.pendingAuthState else {
             throw AuthError.stateMismatch
         }
 
-        guard let verifier = self.pendingCodeVerifier,
-              let clientId = KeychainStore.shared.get(stringForKey: .clientId) else {
+        guard let verifier = self.pendingCodeVerifier else {
             throw AuthError.missingCodeVerifier
         }
 
-        let start = CACurrentMediaTime()
-        let tokenResponse = try await exchangeCodeForTokens(
+        guard let clientId = KeychainStore.shared.get(stringForKey: .clientId) else {
+            throw AuthError.missingClientId
+        }
+
+        let tokens = try await postTokenExchange(
             code: code,
-            verifier: verifier,
+            codeVerifier: verifier,
             clientId: clientId
         )
-        let latency = (CACurrentMediaTime() - start) * 1000.0
 
-        RingBufferLogger.shared.log(
-            level: .info,
-            category: "OAuth",
-            message: "Tokens exchanged successfully",
-            latencyMs: latency
-        )
-
-        saveTokens(response: tokenResponse)
-        return tokenResponse.accessToken
+        saveTokens(response: tokens)
+        RingBufferLogger.shared.log(level: .info, category: "Auth", message: "OAuth PKCE token exchange successful")
+        return tokens.accessToken
     }
 
     public func validAccessToken() async throws -> String {
         if KeychainStore.shared.hasValidAccessToken(),
-           let currentToken = KeychainStore.shared.get(stringForKey: .accessToken) {
-            return currentToken
+           let token = KeychainStore.shared.get(stringForKey: .accessToken) {
+            return token
         }
 
-        guard let refreshToken = KeychainStore.shared.get(stringForKey: .refreshToken),
-              let clientId = KeychainStore.shared.get(stringForKey: .clientId) else {
+        guard let refreshToken = KeychainStore.shared.get(stringForKey: .refreshToken) else {
             throw AuthError.notAuthenticated
         }
 
-        let refreshed = try await refreshAccessToken(refreshToken: refreshToken, clientId: clientId)
-        saveTokens(response: refreshed)
-        return refreshed.accessToken
+        guard let clientId = KeychainStore.shared.get(stringForKey: .clientId) else {
+            throw AuthError.missingClientId
+        }
+
+        let tokens = try await postRefreshToken(
+            refreshToken: refreshToken,
+            clientId: clientId
+        )
+
+        saveTokens(response: tokens)
+        RingBufferLogger.shared.log(level: .info, category: "Auth", message: "OAuth token refreshed successfully")
+        return tokens.accessToken
     }
 
-    // MARK: - HTTP Network Calls
+    // MARK: - Network Token Requests
 
-    private func exchangeCodeForTokens(
+    private func postTokenExchange(
         code: String,
-        verifier: String,
+        codeVerifier: String,
         clientId: String
     ) async throws -> TokenResponse {
         var request = URLRequest(url: tokenEndpoint)
@@ -174,17 +184,17 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
 
         let bodyParameters: [String: String] = [
             "grant_type": "authorization_code",
-            "client_id": clientId,
             "code": code,
             "redirect_uri": Self.redirectURI,
-            "code_verifier": verifier
+            "client_id": clientId,
+            "code_verifier": codeVerifier
         ]
 
         request.httpBody = formatURLEncodedBody(bodyParameters)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthError.networkError("Invalid HTTP response")
+            throw AuthError.networkError("Invalid HTTP response during token exchange")
         }
 
         guard httpResponse.statusCode == 200 else {
@@ -195,7 +205,7 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
         return try JSONDecoder().decode(TokenResponse.self, from: data)
     }
 
-    private func refreshAccessToken(
+    private func postRefreshToken(
         refreshToken: String,
         clientId: String
     ) async throws -> TokenResponse {
@@ -271,12 +281,14 @@ public final class SpotifyPKCEAuthenticator: NSObject, ASWebAuthenticationPresen
 
     // MARK: - ASWebAuthenticationPresentationContextProviding
 
-    public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first(where: { $0.isKeyWindow }) {
-            return window
+    nonisolated public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        MainActor.assumeIsolated {
+            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let window = windowScene.windows.first(where: { $0.isKeyWindow }) {
+                return window
+            }
+            return UIWindow()
         }
-        return UIWindow()
     }
 }
 
@@ -319,25 +331,25 @@ public enum AuthError: LocalizedError, Sendable {
         case .invalidURL:
             return "Unable to construct Spotify authorization URL."
         case .missingCallbackURL:
-            return "Authentication session dismissed without callback."
+            return "Missing authorization callback URL."
         case .invalidCallback:
-            return "Invalid callback URL received from Spotify."
+            return "Received invalid callback parameters."
         case .missingAuthorizationCode:
-            return "No authorization code returned from Spotify."
+            return "Missing OAuth authorization code in callback."
         case .stateMismatch:
-            return "Security state mismatch detected (possible CSRF)."
+            return "OAuth state mismatch: potential CSRF attack detected."
         case .missingCodeVerifier:
-            return "PKCE code verifier is missing from session."
-        case .spotifyRejected(let err):
-            return "Spotify rejected authorization: \(err)"
+            return "Missing PKCE code verifier in memory."
+        case .spotifyRejected(let msg):
+            return "Spotify authorization rejected: \(msg)"
         case .tokenExchangeFailed(let msg):
-            return "Failed to exchange authorization code for tokens: \(msg)"
+            return "PKCE token exchange failed: \(msg)"
         case .tokenRefreshFailed(let msg):
-            return "Failed to refresh Spotify access token: \(msg)"
+            return "Token refresh failed: \(msg)"
         case .notAuthenticated:
-            return "No valid authentication session found. Please sign in."
+            return "No active Spotify session found."
         case .networkError(let msg):
-            return "Network communication error: \(msg)"
+            return "Authentication network error: \(msg)"
         }
     }
 }
