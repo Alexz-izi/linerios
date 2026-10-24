@@ -71,9 +71,9 @@ struct PipelineProofStageView: View {
                     width: 3,
                     height: 3,
                     points: [
-                        [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                        [0.0, 0.5], [Float(0.4 + 0.2 * animationPhase), Float(0.5 + 0.1 * animationPhase)], [1.0, 0.5],
-                        [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
+                        SIMD2<Float>(0.0, 0.0), SIMD2<Float>(0.5, 0.0), SIMD2<Float>(1.0, 0.0),
+                        SIMD2<Float>(0.0, 0.5), SIMD2<Float>(Float(0.4 + 0.2 * animationPhase), Float(0.5 + 0.1 * animationPhase)), SIMD2<Float>(1.0, 0.5),
+                        SIMD2<Float>(0.0, 1.0), SIMD2<Float>(0.5, 1.0), SIMD2<Float>(1.0, 1.0)
                     ],
                     colors: [
                         activeTheme.bgPrimary, activeTheme.bgSecondary, activeTheme.bgPrimary,
