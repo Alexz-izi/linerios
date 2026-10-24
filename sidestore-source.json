@@ -1,0 +1,21 @@
+{
+  "name": "LineriOS Personal Repository",
+  "identifier": "com.personal.linerios.source",
+  "apps": [
+    {
+      "name": "Liner",
+      "bundleIdentifier": "com.personal.linerios",
+      "developerName": "Personal",
+      "version": "1.0.0",
+      "versionDate": "2026-10-24T00:00:00Z",
+      "versionDescription": "Initial Milestone 0 Pipeline Proof (Hello Glass) for iPhone 14 Pro.",
+      "downloadURL": "https://github.com/USER/linerios/releases/latest/download/LineriOS-unsigned.ipa",
+      "localizedDescription": "LineriOS: 120Hz Liquid Glass Spotify Companion for iPhone 14 Pro with synced lyrics and adaptive album atmosphere.",
+      "iconURL": "https://raw.githubusercontent.com/USER/linerios/main/Resources/Assets.xcassets/AppIcon.appiconset/icon_1024.png",
+      "tintColor": "#38BDF8",
+      "size": 15000000,
+      "screenshotURLs": []
+    }
+  ],
+  "news": []
+}

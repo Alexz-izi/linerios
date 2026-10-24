@@ -1,0 +1,878 @@
+PHASE 1B — EXHAUSTIVE PRODUCT SPECIFICATION, SYSTEM ARCHITECTURE & OPERATIONAL BLUEPRINT (DELIVERABLES 10–12 & 16–25)
+10. Screen-by-Screen Product Specification (All 12 Screens)
+All layouts target the iPhone 14 Pro viewport (393 × 852 pt @ 3x scale = 1179 × 2556 px, 59 pt top safe-area inset for the Dynamic Island, 34 pt bottom home-indicator inset, and 120Hz ProMotion adaptive refresh).
+
+S1: Welcome & Initial Setup (WelcomeView.swift)
+Purpose: Zero-secret onboarding that configures the app on first launch without requiring hardcoded credentials in the public GitHub repository.
+
+Layout & Hierarchy:
+
+Background: Animated 3×3 MeshGradient running the Midnight preset (#070913 to #161B33).
+
+Header (Top + 80pt): App emblem rendered inside a 72×72pt .glassEffect(.regular, in: .rect(cornerRadius: 20)) icon tile, title ("Liner for iOS", .system(size: 32, weight: .bold, design: .rounded)), and subtitle explaining the local Spotify companion architecture.
+
+Checklist Card (Center): A GlassEffectContainer card showing three live environment readiness checks:
+
+Spotify iOS App Installed: Verified via UIApplication.shared.canOpenURL(URL(string: "spotify:")!).
+
+Spotify Client ID Configured: Verified via Keychain lookup (com.personal.linerios.client_id).
+
+Local Network / URL Scheme Ready: Verified via Info.plist LSApplicationQueriesSchemes.
+
+Primary CTA (Bottom - 48pt): Full-width capsule button (height: 54pt) with .buttonStyle(.glass) labeled "Configure Spotify Connection".
+
+Interactions & Haptics: Tapping CTA triggers .sensoryFeedback(.impact(weight: .medium)) and pushes S2: AuthConfigView. If canOpenURL("spotify:") returns false, tapping the checklist row opens the App Store page for Spotify (itms-apps://[itunes.apple.com/app/id324684580](https://itunes.apple.com/app/id324684580)).
+
+Loading / Empty / Error States: If Keychain already holds a valid refresh token on cold boot, S1 is bypassed automatically in <15ms.
+
+Accessibility: VoiceOver groups the three readiness rows into a single summary announcement; supports Dynamic Type up to AX3 via ViewThatFits.
+
+S2: Spotify PKCE Connection & Auth Diagnostics (AuthConfigView.swift)
+Purpose: Allows pasting your personal Spotify Developer client_id, displays the exact Redirect URI (linerios://auth-callback) to register in your Spotify Dashboard, and executes the client-side OAuth 2.0 PKCE handshake + SPTAppRemote local IPC link.
+
+Layout & Hierarchy:
+
+Step 1 Glass Card: Displays copyable Redirect URI pill (linerios://auth-callback) with a one-tap "Copy URI" button.
+
+Step 2 Glass Input Field: Monospaced text field for the 32-character hexadecimal Spotify client_id, with a "Paste from Clipboard" icon button (UIPasteboard.general.string).
+
+Step 3 Action Bar: Primary "Authorize with Spotify (PKCE)" button + expandable "Auth Diagnostics Console" disclosure group showing PKCE code_Challenge (SHA-256 base64url), HTTP status codes, granted scopes (user-read-playback-state, user-modify-playback-state, user-read-currently-playing, user-read-recently-played, user-library-read, user-library-modify, playlist-read-private), and token TTL.
+
+Interactions & Haptics:
+
+Validates that client_id matches regex ^[0-9a-fA-F]{32}$ before enabling the Authorize button.
+
+Launches ASWebAuthenticationSession(url: callbackURLScheme: "linerios") with prefersEphemeralWebBrowserSession = false so your existing Safari Spotify login is reused.
+
+After receiving the authorization code, exchanges it for access_token + refresh_token, then immediately triggers SPTAppRemote.authorizeAndPlayURI("") to pair local IPC with the installed Spotify app.
+
+Error Handling:
+
+invalid_client: Highlights the 32-char Client ID field in crimson (#F43F5E) with .sensoryFeedback(.error).
+
+403 Forbidden (User not registered in Developer Dashboard): Displays explicit instructions to add your Spotify account email under Spotify Dashboard - Users and Access or verify Spotify Premium status.
+
+S3: Home & Recently Played (HomeView.swift)
+Purpose: Fast-launch music hub showing current playback continuation, recently played tracks (GET /v1/me/player/recently-played?limit=20), and saved playlists.
+
+Layout & Hierarchy:
+
+Top Bar (top: 59pt): Time-of-day greeting, active Spotify Connect device pill (e.g., "iPhone 14 Pro • Local IPC" in emerald green), and quick link to Settings (S11).
+
+Section 1 — Jump Back In: 2-column compact glass grid (LazyVGrid, height 60pt per cell) of the 6 most recent distinct contexts (playlists/albums).
+
+Section 2 — Recently Played Tracks: Horizontal ScrollView with .scrollTargetBehavior(.viewAligned) displaying 148×148pt album artwork cards with subtle specular borders (1pt linear gradient white 0.22 to 0.04).
+
+Section 3 — Quick Saved Tracks: Vertical list of the latest 10 saved songs from GET /v1/me/tracks?limit=10.
+
+Interactions & Haptics: Tapping any track dispatches PlaybackController.play(uri:) via local SPTAppRemote (<15ms latency) and springs open the Mini-Player (S8). Pull-to-refresh re-syncs recent history and caches artwork palettes in SQLite.
+
+Loading / Empty / Error States:
+
+Loading: 6 shimmer skeleton cells using a phase-animated linear gradient mask.
+
+Offline: Automatically loads the last cached snapshot from SQLite recent_tracks with a subtle "Cached • Offline" glass badge in the header.
+
+S4: Search & Debounced Input (SearchView.swift)
+Purpose: Instant local cached search + debounced Spotify catalog query respecting the February/March 2026 Development Mode pagination ceiling (limit=10).
+
+Layout & Hierarchy:
+
+Floating Search Capsule: Positioned at top safe area inside a GlassEffectContainer, featuring magnifying glass icon, text input, clear (xmark.circle.fill) button, and cancel button.
+
+Idle State (Query Empty): Displays "Recent Searches" (stored locally in SQLite, swipe-to-delete or "Clear All") and "Cached Offline Lyrics Library" quick filter so you can browse songs that already have offline synced lyrics stored on-device.
+
+Interactions & Haptics:
+
+Uses Swift Concurrency task cancellation (Task.sleep(for: .milliseconds(320))) so rapid typing never spams GET /v1/search.
+
+Queries shorter than 2 characters search only the local SQLite track/lyrics cache; queries 
+≥2 characters fire GET /v1/search?q={encoded}&type=track,album,artist,playlist&limit=10.
+
+S5: Search Results (SearchResultsView.swift)
+Purpose: Structured presentation of Spotify's 10-item-per-type Development Mode search payload with instant playback and pagination (offset=0, 10, 20...).
+
+Layout & Hierarchy:
+
+Filter Pills: Horizontal glass filter bar (All, Songs, Albums, Artists, Playlists) using .glassEffectID("searchFilter", in: searchNamespace) for smooth pill morphing.
+
+Top Result Hero Card: Large glass card highlighting the closest exact match with a prominent circular Play button (44×44pt).
+
+Track Rows (height: 64pt): 48×48pt rounded artwork (cornerRadius: 8), track title (1 line, .semibold), explicit "E" badge if isExplicit, artist + album subtitle (.secondary), duration (mm:ss), and a trailing ellipsis menu (Play Next, Save to Library PUT /v1/me/library, Pre-fetch Lyrics).
+
+Infinite Scroll Pagination: Reaching item #8 of 10 triggers the next page (offset + 10) only if the user is actively scrolling the specific category tab.
+
+S6: Library & Saved Playlists (LibraryView.swift)
+Purpose: Full access to the user's Spotify playlists (GET /v1/me/playlists) and Liked Songs (GET /v1/me/tracks), compliant with the 2026 /v1/playlists/{id}/items endpoint schema.
+
+Layout & Hierarchy:
+
+Header Controls: Segmented glass toggle (Playlists | Liked Songs | Offline Lyrics) + view-mode toggle (Grid vs. List).
+
+Playlist Detail Sheet/Push: Collapsible parallax header showing playlist cover art, title, owner name, total item count, and two primary glass pills: "Play" and "Shuffle".
+
+Batch Lyrics Pre-Warmer: A secondary toolbar button ("Cache Lyrics for Playlist") that iterates through the playlist's tracks in the background (1 request every 650ms to respect LRCLIB fair use) and stores all .lrc files into SQLite for offline use.
+
+S7: Full Now Playing Screen (NowPlayingView.swift)
+Purpose: The flagship Apple Music / Liner-inspired visual experience combining Adaptive Album Atmosphere, 120Hz interactive scrubbing, and Liquid Glass controls.
+
+Layout & Hierarchy (Top to Bottom inside 393 × 852 pt):
+
+Background Layer (zIndex: 0): Full-bleed 3×3 SwiftUI MeshGradient driven by the 4 dominant colors extracted from the current track's album art, darkened to guarantee WCAG AA (≥ 4.5:1) contrast against white text.
+
+Dismiss Grabber (top: 67pt): 36×5pt translucent pill (Color.white.opacity(0.35)).
+
+Album Artwork Stage (333×333pt centered): High-resolution (640×640) cover art with dynamic scale transition: scales to 1.0 with a deep ambient drop shadow (radius: 28, y: 14, tinted with the primary artwork hex) when playing, and shrinks to 0.86 with spring physics (response: 0.45, dampingFraction: 0.72) when paused.
+
+Track Metadata & Favorite Row: Marquee-scrolling title (.system(size: 22, weight: .bold)), tappable artist name (.system(size: 17, weight: .medium), opacity 0.75), and heart/bookmark button wired to PUT/DELETE /v1/me/library?uris=spotify:track:{id}.
+
+Interactive Scrubbing Timeline: Custom Liquid Glass slider that expands vertically from 6pt to 14pt height when touched, showing live elapsed (mm:ss) and remaining (-mm:ss) monospaced timestamps driven by the 120Hz ClockInterpolator.
+
+Primary Transport Cluster (GlassEffectContainer): Previous (backward.fill), Play/Pause (play.fill / pause.fill, 68×68pt circular glass button), and Next (forward.fill) with fluid .glassEffect() specular highlights.
+
+Bottom Utility Dock: Shuffle toggle, Spotify Connect device picker button, Repeat mode toggle (off -> context -> track), and the "Lyrics-First Mode" morph button (displaying a live badge: SYNCED, WORD-SYNC, or PLAIN).
+
+Gestures & Haptics:
+
+Vertical drag (> 110pt downward velocity) morphs the screen back into S8: MiniPlayerView.
+
+Horizontal swipe across the album artwork skips to Next/Previous track with .sensoryFeedback(.impact(weight: .medium)).
+
+S8: Persistent Liquid Glass Mini-Player (MiniPlayerView.swift)
+Purpose: Always-accessible floating playback bar hovering above the bottom tab bar across Home, Search, and Library.
+
+Layout & Hierarchy:
+
+Geometry: width: 369pt (12pt horizontal margins), height: 64pt, cornerRadius: 22pt, floating 10pt above the tab bar inside a shared GlassEffectContainer.
+
+Contents: 44×44pt album art thumbnail (matchedGeometryEffect(id: "albumArt", in: playerNamespace)), 2-line track title + artist stack, a subtle 2pt bottom progress hairline tinted with the album's vibrant accent color, a Play/Pause glass button, and a Next Track button.
+
+Interactions:
+
+Tap anywhere on the capsule expands S7: NowPlayingView using .glassEffectID("playerContainer", in: playerNamespace).
+
+Horizontal drag gesture on the title/artwork area previews the next/previous track and triggers skip on release (translation.width > 80pt).
+
+S9: Lyrics-First Mode (LyricsView.swift)
+Purpose: 120Hz ProMotion full-screen synchronized karaoke/lyrics stage modeled after Apple Music and @braccato/core.
+
+Layout & Hierarchy:
+
+Compact Pinned Header (height: 76pt): Blurred glass header containing a 48×48pt album art thumbnail, track title, artist name, and an inline Offset Stepper Pill (-100ms | +0ms | +100ms) for instant sync fine-tuning.
+
+Lyrics Scroll Viewport (ScrollViewReader):
+
+Active Line: Left-aligned, .system(size: 28, weight: .bold, design: .rounded), scaled to 1.04x, full white (opacity: 1.0) with subtle text glow (shadow(color: accentColor.opacity(0.5), radius: 12)). For Enhanced LRC / TTML tracks, each word token fills horizontally from left to right based on instantaneous syllable progress 
+p∈[0,1].
+
+Inactive Lines: Scaled to 0.95x, opacity 0.32, with distance-based progressive Gaussian blur (blur(radius: min(CGFloat(abs(lineIndex - activeIndex)) * 1.15, 5.5))).
+
+Instrumental Interludes: Renders three pulsing musical note dots (• • •) whose scale oscillates smoothly over the instrumental gap duration.
+
+Manual Scroll Override Pill: When the user drags the scroll view manually, auto-scrolling pauses immediately, all line blurs drop to 0pt for easy reading, and a floating .glassEffect() pill ("Resume Auto-Scroll") appears at the bottom right. Auto-scroll resumes automatically after 3.5 seconds of touch inactivity or immediately upon tapping the pill.
+
+Tap-to-Seek: Tapping any timestamped lyric line seeks Spotify to line.startTimeMs via SPTAppRemote.playerAPI?.seek(toPosition:) and triggers .sensoryFeedback(.selection).
+
+Plain-Text / Missing Lyrics Fallback:
+
+Plain Text Only: Renders clean scrollable paragraphs (font: 20pt, line spacing 8pt) with a top badge: "Unsynchronized Lyrics • Manual Scroll".
+
+Missing Lyrics: Displays an empty state card with two one-tap actions: "Search LRCLIB Manually" (pre-filled editable title/artist modal) and "Import .LRC / .TTML File" (via iOS Files picker).
+
+S10: Theme Selection & Atmosphere Customizer (ThemeCustomizerView.swift)
+Purpose: Live visual customization of the four required theme presets (Midnight, Obsidian, Aurora, Afterhours), custom accent color overrides, and GPU/battery shader controls.
+
+Layout & Hierarchy:
+
+Live Preview Header: Miniaturized interactive preview of the Liquid Glass player showing real-time refraction and tint updates.
+
+2×2 Preset Grid: Four interactive cards representing Midnight, Obsidian, Aurora, and Afterhours.
+
+Atmosphere Controls:
+
+Toggle: Adaptive Album Art Tint (extracts palette from current song vs. locking to preset theme palette).
+
+Slider: Glass Specular Intensity (0.1 to 1.0).
+
+Picker: Mesh Animation Frame Rate (60Hz Smooth, 30Hz Eco, Static Gradient).
+
+ColorPicker: Custom Accent Override with automatic WCAG AA contrast warning badge if the chosen color has luminance contrast < 4.5:1 against the dark surface.
+
+Toggle: Keep Screen Awake in Lyrics Mode (isIdleTimerDisabled).
+
+S11: Settings, Cache Manager & In-App Diagnostic Overlay (SettingsView.swift)
+Purpose: Complete control over local SQLite storage, JSON backup/restore, and Windows-less on-device debugging (crucial since you do not have a Mac connected with Xcode Console).
+
+Layout & Hierarchy:
+
+Section 1 — Sideloading & Certificate Status: Tracks the installation/refresh date and displays a live countdown badge ("SideStore Certificate: 5 days, 14 hours remaining") with a one-tap shortcut (sidestore://) to open SideStore and refresh.
+
+Section 2 — Storage & SQLite Cache Manager: Live breakdown of SQLite database size (Lyrics count, Cached Palettes, Artwork Disk Cache MB) with separate buttons for "Clear Artwork Cache" and "Clear Cached Lyrics".
+
+Section 3 — Backup & Migration: "Export Full Backup (.json)" and "Import Backup (.json)" via UIDocumentPickerViewController.
+
+Section 4 — On-Device Developer HUD (Windows-less Debugger): Toggles a floating, draggable translucent debug overlay showing live FPS (CADisplayLink), RAM usage (task_info), SPTAppRemote connection state, last 50 HTTP/IPC requests with latency in ms, and an exportable .log file generator.
+
+S12: Connection, Rate-Limit (429), Token Expiry & Offline States (SystemStatusModals.swift)
+Purpose: Non-destructive, recoverable UI banners and glass sheets for every edge case.
+
+Behaviors:
+
+Spotify App Asleep (SPTAppRemote Disconnected): Displays a floating glass pill above the Mini-Player: "Spotify is asleep • Tap to wake & connect". Tapping it fires SPTAppRemote.connect() (which briefly wakes Spotify via URL scheme and returns automatically to LineriOS) or falls back to Web API Connect control.
+
+Rate Limit (HTTP 429 Too Many Requests): Reads the Retry-After HTTP header, pauses Web API requests for that exact duration, displays a non-blocking countdown pill ("Spotify API cooling down: 14s"), and keeps local SPTAppRemote playback + cached lyrics running seamlessly.
+
+Offline Mode (NWPathMonitor .unsatisfied): Switches Search and Library into Offline Cache Mode, allowing full browsing of cached playlists and offline .lrc lyrics while local Spotify playback continues from Spotify's own offline cache.
+
+11. iOS 26 Liquid Glass Design System & Animation Guidelines
+Native iOS 26 SwiftUI Liquid Glass Implementation
+Unlike older iOS 15–18 .ultraThinMaterial blurs that only perform a static Gaussian blur, iOS 26 introduces public hardware-accelerated Liquid Glass APIs in SwiftUI (GlassEffectContainer, .glassEffect(_:in:isEnabled:), .glassEffectID(_:in:), .glassEffectUnion(id:namespace:), and .glassEffectTransition(_:)).
+
+Core Architectural Rules (Apple HIG iOS 26 Compliance)
+Strict Layer Separation: Liquid Glass is used exclusively on the floating functional and navigation layer (Mini-Player capsule, transport controls, filter pills, top search bar) hovering over the content and atmosphere layer (MeshGradient + album art + lyrics). Never stack a .glassEffect() view directly inside another .glassEffect() view.
+
+Grouped Rendering via GlassEffectContainer: Wrap adjacent glass controls inside GlassEffectContainer(spacing: 16) { ... }. SwiftUI renders all child glass shapes in a single shared Metal pass, improving GPU performance and allowing neighboring capsules to organically blend and morph into one another as they move closer than spacing.
+
+Morphing Transitions via .glassEffectID: Pair @Namespace private var glassNamespace with .glassEffectID("miniToFullPlayer", in: glassNamespace) and .glassEffectTransition(.matchedGeometry) so the compact Mini-Player capsule physically stretches and refracts into the full Now Playing control bar.
+
+Swift
+// Canonical iOS 26 Liquid Glass Transport Bar Pattern
+GlassEffectContainer(spacing: 18) {
+    HStack(spacing: 20) {
+        Button(action: viewModel.previousTrack) {
+            Image(systemName: "backward.fill")
+                .font(.title2)
+                .frame(width: 52, height: 52)
+        }
+        .glassEffect(.regular.interactive(), in: .circle)
+        .glassEffectID("prevButton", in: playerNamespace)
+
+        Button(action: viewModel.togglePlayPause) {
+            Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                .font(.title)
+                .frame(width: 68, height: 68)
+        }
+        .glassEffect(.regular.tint(theme.accentColor.opacity(0.28)).interactive(), in: .circle)
+        .glassEffectID("playPauseButton", in: playerNamespace)
+
+        Button(action: viewModel.nextTrack) {
+            Image(systemName: "forward.fill")
+                .font(.title2)
+                .frame(width: 52, height: 52)
+        }
+        .glassEffect(.regular.interactive(), in: .circle)
+        .glassEffectID("nextButton", in: playerNamespace)
+    }
+}
+The Four Required Theme Presets & Token Specification
+Design Token	1. Midnight (Default)	2. Obsidian (True OLED)	3. Aurora (Nordic Mesh)	4. Afterhours (Warm Synth)
+Primary Background (bgPrimary)	#070913	#000000 (0mA OLED draw)	#06110E	#11080A
+Elevated Surface (bgSecondary)	#0F1428	#0A0A0C	#0D211B	#1F0E13
+Glass Tint Color (glassTint)	#1E2952 @ 24%	#FFFFFF @ 8%	#10B981 @ 18%	#F43F5E @ 20%
+Specular Rim Highlight	#7DD3FC @ 32% → 4%	#E2E8F0 @ 40% → 6%	#6EE7B7 @ 35% → 5%	#FDA4AF @ 36% → 5%
+Default Accent (accentPrimary)	#38BDF8 (Sky Cyan)	#F8FAFC (Crisp Silver)	#34D399 (Emerald)	#FB7185 (Neon Rose)
+Secondary Mesh Node (meshNode2)	#4F46E5 (Indigo)	#18181B (Zinc Dark)	#8B5CF6 (Violet)	#D97706 (Warm Amber)
+Primary Text (textPrimary)	#F8FAFC (100%)	#FFFFFF (100%)	#ECFDF5 (100%)	#FFF1F2 (100%)
+Inactive Lyric Text (textMuted)	#94A3B8 (34%)	#71717A (36%)	#6EE7B7 (32%)	#FDA4AF (34%)
+Adaptive Album Atmosphere Pipeline (PaletteExtractor.swift)
+Downsample: When a new albumArtURL arrives, decode the image into a 64 × 64 px CGContext using vImageScale_ARGB8888 (<1.2ms on A16 Bionic).
+
+Quantization & Filtering: Run a 4-cluster k-means pass (maxIterations: 8) in perceptual LAB color space, discarding near-black (
+L 
+∗
+ <12) and near-white (
+L 
+∗
+ >92) pixels so muddy shadows don't wash out the mesh.
+
+Contrast Clamping (WCAG AA):
+
+Convert the 4 extracted centroids to relative luminance 
+Y=0.2126R+0.7152G+0.0722B.
+
+For background mesh nodes (c0–c3), clamp luminance to 
+Y≤0.14 so white foreground text (
+Y=1.0) always achieves a contrast ratio 
+0.14+0.05
+1.0+0.05
+​
+ ≥5.52:1 (exceeding WCAG AA 
+4.5:1).
+
+For the interactive accent color (cAccent), enforce saturation 
+S≥0.55 and luminance 
+Y≥0.42.
+
+12. System Architecture, Domain Protocols, project.yml, CI Workflow & Directory Tree
+Layered Clean Architecture Diagram
+┌────────────────────────────────────────────────────────────────────────────┐
+│ PRESENTATION LAYER (SwiftUI + iOS 26 Liquid Glass + 120Hz ProMotion)       │
+│  • Views: NowPlayingView, LyricsView, MiniPlayerView, SearchView, HomeView │
+│  • ViewModels (@MainActor @Observable): PlayerStore, LyricsStore, ThemeMgr │
+└──────────────────────────────────────┬─────────────────────────────────────┘
+                                       │
+┌──────────────────────────────────────▼─────────────────────────────────────┐
+│ DOMAIN LAYER (Pure Swift 6 Protocols & Value Types — Zero Framework Deps)  │
+│  • Protocols: PlaybackControllerProtocol, LyricsProviderProtocol,          │
+│               PaletteExtractorProtocol, ClockInterpolating                 │
+│  • Engine: ClockInterpolator (CADisplayLink 120Hz monotonic drift solver)  │
+└───────────┬──────────────────────────┬─────────────────────────┬───────────┘
+            │                          │                         │
+┌───────────▼───────────┐  ┌───────────▼───────────┐ ┌───────────▼───────────┐
+│ SPOTIFY HYBRID ADAPTER│  │ LYRICS & VISUAL ENGINE│ │ PERSISTENCE & SECURITY│
+│ • SPTAppRemoteAdapter │  │ • LRCLIBProvider      │ │ • KeychainStore (PKCE)│
+│   (Local IPC <15ms)   │  │ • LocalLRCFileImporter│ │ • SQLiteCacheActor    │
+│ • SpotifyWebAPIClient │  │ • BraccatoTTMLParser  │ │ • BackupJSONService   │
+│   (PKCE + Search/Lib) │  │ • VImagePaletteEngine │ │ • RingBufferLogger    │
+└───────────────────────┘  └───────────────────────┘ └───────────────────────┘
+Core Swift 6 Domain Protocol Contracts
+Swift
+import Foundation
+import SwiftUI
+
+public enum PlaybackConnectionState: Sendable, Equatable {
+    case disconnected
+    case connecting
+    case connectedLocalIPC          // SPTAppRemote active (<15ms latency)
+    case connectedCloudWebAPI       // Fallback HTTP Connect control
+    case rateLimited(retryAfter: TimeInterval)
+    case error(String)
+}
+
+public struct PlaybackSnapshot: Sendable, Equatable {
+    public let trackURI: String
+    public let title: String
+    public let artist: String
+    public let album: String
+    public let artworkURL: URL?
+    public let durationMs: Int
+    public let anchorPositionMs: Int
+    public let anchorMonotonicTime: TimeInterval // CACurrentMediaTime()
+    public let isPlaying: Bool
+    public let shuffleEnabled: Bool
+    public let repeatMode: RepeatMode
+    public let activeDeviceName: String
+}
+
+@MainActor
+public protocol PlaybackControllerProtocol: AnyObject {
+    var connectionState: PlaybackConnectionState { get }
+    var currentSnapshot: PlaybackSnapshot? { get }
+    var onSnapshotUpdate: ((PlaybackSnapshot) -> Void)? { get set }
+
+    func connect() async throws
+    func disconnect()
+    func play(uri: String?) async throws
+    func pause() async throws
+    func skipNext() async throws
+    func skipPrevious() async throws
+    func seek(toPositionMs: Int) async throws
+    func setShuffle(_ enabled: Bool) async throws
+    func setRepeatMode(_ mode: RepeatMode) async throws
+}
+
+public enum LyricsSyncGranularity: String, Codable, Sendable {
+    case syllableSynced   // Enhanced LRC <mm:ss.xx> or TTML word spans
+    case lineSynced       // Standard LRC [mm:ss.xx]
+    case plainText        // Unsynchronized text
+    case instrumental     // Explicit instrumental track
+    case unavailable      // Not found
+}
+
+public struct LyricWordToken: Codable, Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public let text: String
+    public let startTimeMs: Int
+    public let endTimeMs: Int
+}
+
+public struct LyricLine: Codable, Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public let startTimeMs: Int
+    public let endTimeMs: Int
+    public let text: String
+    public let words: [LyricWordToken] // Non-empty when syllableSynced
+}
+
+public struct LyricsPayload: Codable, Sendable, Equatable {
+    public let trackURI: String
+    public let sourceProvider: String
+    public let granularity: LyricsSyncGranularity
+    public let lines: [LyricLine]
+    public let plainTextFallback: String?
+    public let userOffsetMs: Int
+    public let fetchedAt: Date
+}
+
+public protocol LyricsProviderProtocol: Sendable {
+    var providerName: String { get }
+    func fetchLyrics(
+        trackURI: String,
+        title: String,
+        artist: String,
+        album: String,
+        durationMs: Int
+    ) async throws -> LyricsPayload?
+}
+Complete project.yml (XcodeGen Configuration for Windows-to-GitHub Actions)
+Because you are editing on Windows 11 in VS Code, you never touch a binary .xcodeproj. Instead, this project.yml generates the project on the GitHub Actions runner and includes the optional ENABLE_LIVE_ACTIVITY_EXTENSION flag so your default build uses only 1 Bundle ID slot:
+
+YAML
+name: LineriOS
+options:
+  bundleIdPrefix: com.personal
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "26.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1" # iPhone only
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  LineriOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    resources:
+      - path: Resources
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Liner
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        CFBundleURLTypes:
+          - CFBundleURLName: com.personal.linerios.auth
+            CFBundleURLSchemes:
+              - linerios
+        LSApplicationQueriesSchemes:
+          - spotify
+          - spotify-action
+          - sidestore
+        CADisableMinimumFrameDurationOnPhone: true # Enables 120Hz ProMotion on iPhone 14 Pro
+    dependencies:
+      - framework: Vendor/SpotifyiOS.xcframework
+        embed: true
+      - sdk: sqlite3.tbd
+      - sdk: Accelerate.framework
+      - sdk: AuthenticationServices.framework
+      - sdk: CryptoKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.personal.linerios
+        OTHER_LDFLAGS: "-ObjC"
+        SWIFT_OBJC_BRIDGING_HEADER: "Sources/Bridge/LineriOS-Bridging-Header.h"
+
+  LineriOSUnitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: LineriOS
+Complete GitHub Actions Workflow (.github/workflows/build-unsigned-ipa.yml)
+YAML
+name: Build Unsigned iOS 26 IPA & Update SideStore Source
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Generate Xcode Project via XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Run Unit Tests (Clock Interpolator, LRC/TTML Parser, SQLite Cache)
+        run: |
+          xcodebuild test \
+            -project LineriOS.xcodeproj \
+            -scheme LineriOS \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Compile Unsigned Release .app for iPhone 14 Pro (arm64)
+        run: |
+          xcodebuild build \
+            -project LineriOS.xcodeproj \
+            -scheme LineriOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: Package Unsigned .ipa Bundle
+        run: |
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/LineriOS.app Payload/
+          zip -r9 LineriOS-unsigned.ipa Payload
+
+      - name: Upload Unsigned .ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LineriOS-unsigned-ipa
+          path: LineriOS-unsigned.ipa
+Complete Project Directory Tree
+Plaintext
+LineriOS/
+├── .github/
+│   └── workflows/
+│       └── build-unsigned-ipa.yml               # €0 automated Xcode 26 builder & unit tester
+├── project.yml                                  # XcodeGen declarative project spec
+├── sidestore-source.json                        # OTA AltStore/SideStore repo manifest
+├── Vendor/
+│   └── SpotifyiOS.xcframework/                  # Official Spotify iOS App Remote binary
+├── Resources/
+│   ├── Info.plist                               # URL schemes, 120Hz ProMotion flag
+│   └── Assets.xcassets/                         # AppIcon, fallback textures
+├── Sources/
+│   ├── App/
+│   │   ├── LinerApp.swift                       # @main SwiftUI lifecycle & URL router
+│   │   └── AppEnvironment.swift                 # Dependency injection container
+│   ├── Bridge/
+│   │   └── LineriOS-Bridging-Header.h           # #import <SpotifyiOS/SpotifyiOS.h>
+│   ├── Domain/
+│   │   ├── Models/
+│   │   │   ├── PlaybackSnapshot.swift
+│   │   │   ├── TrackItem.swift
+│   │   │   ├── LyricsPayload.swift
+│   │   │   └── ThemePreset.swift
+│   │   ├── Protocols/
+│   │   │   ├── PlaybackControllerProtocol.swift
+│   │   │   ├── LyricsProviderProtocol.swift
+│   │   │   └── PaletteExtractorProtocol.swift
+│   │   └── Engine/
+│   │       ├── ClockInterpolator.swift          # 120Hz CADisplayLink monotonic clock
+│   │       └── BraccatoLyricsParser.swift       # LRC, Enhanced LRC & TTML syllable parser
+│   ├── Data/
+│   │   ├── Spotify/
+│   │   │   ├── SpotifyPKCEAuthenticator.swift   # ASWebAuthenticationSession + CryptoKit S256
+│   │   │   ├── SpotifyAppRemoteAdapter.swift    # Local IPC SPTAppRemote implementation
+│   │   │   ├── SpotifyWebAPIClient.swift        # 2026 Dev Mode compliant REST client
+│   │   │   └── HybridPlaybackCoordinator.swift  # Automatic IPC <-> Web API failover
+│   │   ├── Lyrics/
+│   │   │   ├── LRCLIBProvider.swift             # Primary zero-cost lyrics adapter
+│   │   │   ├── LocalLRCFileProvider.swift       # Files.app .lrc/.ttml importer
+│   │   │   └── CompositeLyricsRepository.swift  # Cache -> LRCLIB -> Fallback orchestrator
+│   │   ├── Visuals/
+│   │   │   └── VImagePaletteExtractor.swift     # 64x64 vImage + LAB k-means + WCAG clamper
+│   │   └── Persistence/
+│   │       ├── KeychainStore.swift              # Hardware-backed token & client_id vault
+│   │       ├── SQLiteCacheActor.swift           # Thread-safe actor wrapping sqlite3 C API
+│   │       ├── BackupMigrationService.swift     # JSON export/import via UIDocumentPicker
+│   │       └── RingBufferLogger.swift           # In-memory diagnostic logger for Windows-less debug
+│   └── Presentation/
+│       ├── Stores/
+│       │   ├── PlayerStore.swift
+│       │   ├── LyricsStore.swift
+│       │   ├── SearchStore.swift
+│       │   ├── LibraryStore.swift
+│       │   └── ThemeManager.swift
+│       ├── Components/
+│       │   ├── AdaptiveAtmosphereMeshView.swift # 3x3 Metal MeshGradient surface
+│       │   ├── LiquidGlassMiniPlayer.swift      # S8 persistent morphing capsule
+│       │   └── DiagnosticOverlayHUD.swift       # Floating FPS/Network/IPC inspector
+│       └── Screens/
+│           ├── WelcomeView.swift                # S1
+│           ├── AuthConfigView.swift             # S2
+│           ├── HomeView.swift                   # S3
+│           ├── SearchView.swift                 # S4 & S5
+│           ├── LibraryView.swift                # S6
+│           ├── NowPlayingView.swift             # S7
+│           ├── LyricsView.swift                 # S9
+│           ├── ThemeCustomizerView.swift        # S10
+│           ├── SettingsView.swift               # S11
+│           └── SystemStatusModals.swift         # S12
+└── Tests/
+    ├── ClockInterpolatorTests.swift
+    ├── BraccatoLyricsParserTests.swift
+    └── SQLiteCacheActorTests.swift
+16. Playback, Sideloading & Background Behavior Matrix
+Operational Scenario	Active Audio Owner	App & System State	Exact Technical Behavior & Recovery Flow
+1. Normal Foreground Listening	Spotify iOS App (Background)	LineriOS Foregrounded (120Hz)	SPTAppRemote socket is open. Play/Pause/Seek execute via local IPC in <15ms. ClockInterpolator drives 120Hz lyric scrolling with zero HTTP calls.
+2. User Locks iPhone 14 Pro Screen	Spotify iOS App (Background)	LineriOS Suspended (scenePhase == .background)	LineriOS immediately pauses CADisplayLink and MeshGradient shaders (0% GPU/CPU usage). System Lock Screen displays Spotify's native MPNowPlayingInfoCenter card.
+3. User Unlocks Phone / Returns to App	Spotify iOS App (Background)	LineriOS Active (scenePhase == .active)	SPTAppRemote reconnects in <120ms, fetches latest playbackPosition, updates ClockInterpolator anchor (P 
+anchor
+​
+ ,T 
+anchor
+​
+ ), and snaps lyrics to the exact current syllable.
+4. Desk / MagSafe Docked Lyric Mode	Spotify iOS App (Background)	LineriOS Foregrounded + isIdleTimerDisabled = true	Phone screen stays awake indefinitely. If iPhone is unplugged and battery drops below 20%, isIdleTimerDisabled automatically resets to false to protect battery.
+5. User Force-Kills Spotify App	None	LineriOS Foregrounded	SPTAppRemote fires appRemote(_:didDisconnectWithError:). LineriOS displays the non-intrusive "Wake Spotify" glass banner. Tapping it invokes SPTAppRemote.authorizeAndPlayURI(lastTrackURI), which launches Spotify in the background, starts audio, and immediately returns focus to LineriOS.
+6. Network Drops (Subway / Airplane Mode)	Spotify iOS App (Offline Cache)	NWPathMonitor status = .unsatisfied	Local SPTAppRemote IPC continues working 100% offline because it uses local inter-process communication on the iPhone. CompositeLyricsRepository serves cached .lrc/TTML files from SQLite.
+7. Playback Handed Off to Windows 11 PC (Spotify Connect)	Spotify Desktop App	LineriOS Foregrounded (Remote Controller Mode)	HybridPlaybackCoordinator detects that local SPTAppRemote is idle while GET /v1/me/player shows an active remote device ("Windows 11 Desktop"). LineriOS switches to Cloud Connect Mode, polling /v1/me/player every 5.0s while interpolating 120Hz lyrics locally on your iPhone screen!
+8. Incoming Phone Call / Siri / Alarm Interruption	iOS System (Ringtone / Siri)	Audio Interrupted	Spotify pauses automatically via iOS AVAudioSession.interruptionNotification and sends a isPaused = true state update to LineriOS. ClockInterpolator freezes at R=0.0 and resumes cleanly when the call ends.
+9. 7-Day Free Apple ID Certificate Expires	N/A	iOS blocks app launch ("LineriOS is no longer available")	CRITICAL RULE: Do NOT uninstall LineriOS. Open SideStore (or connect to Windows 11 iloader if SideStore also expired) and re-sign/refresh over the existing installation. iOS preserves the entire app sandbox (Documents/liner_cache.sqlite and Keychain tokens) intact.
+17. Offline Behavior & Legal SQLite Caching Matrix
+All local persistence is managed by SQLiteCacheActor stored inside FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("liner_cache.sqlite") with SQLite PRAGMA journal_mode = WAL; enabled for concurrent read/write performance.
+
+SQLite Table / Store	Exact Columns & Schema	Legal Caching Policy	TTL & Eviction Strategy
+lyrics_cache	track_uri TEXT PRIMARY KEY, provider TEXT, granularity TEXT, lines_json BLOB, plain_text TEXT, user_offset_ms INTEGER DEFAULT 0, updated_at INTEGER	Permitted (LRCLIB open database & user-imported .lrc/.ttml files).	Permanent (Never auto-evicted; ~4KB per song = 10,000 songs take <40MB). User offsets (user_offset_ms) are preserved even if lyrics are re-fetched.
+palette_cache	artwork_url TEXT PRIMARY KEY, bg_hex_0 TEXT, bg_hex_1 TEXT, bg_hex_2 TEXT, bg_hex_3 TEXT, accent_hex TEXT, extracted_at INTEGER	Permitted (Computed hex color vectors derived on-device).	Permanent (~180 bytes per album; eliminates redundant image decoding).
+metadata_cache	spotify_uri TEXT PRIMARY KEY, entity_type TEXT, payload_json BLOB, cached_at INTEGER	Permitted Ephemeral Cache (Allows offline display of playlists/recent tracks while disconnected).	7-Day Rolling TTL (Refreshed automatically when online; purged on logout).
+artwork_disk_cache	Managed via dedicated URLCache (diskCapacity: 150 MB, memoryCapacity: 30 MB).	Permitted Temporary Display Cache.	LRU Eviction at 150 MB or one-tap clear in S11: SettingsView.
+Raw Spotify Audio Streams	NONE	Strictly Prohibited by Spotify Developer Terms.	Never intercepted, buffered, or written to disk under any circumstance.
+18. Backup, Export, Restore & Migration Plan
+Even though refreshing an expired app via SideStore/iLoader keeps your app data intact, if you ever switch Apple IDs, reset your iPhone, or delete the app by mistake, the JSON Backup & Restore Engine (BackupMigrationService.swift) guarantees zero data loss:
+
+Deterministic Portable Schema (LinerBackupArchive v1):
+
+JSON
+{
+  "schemaVersion": 1,
+  "exportedAt": "2026-10-24T14:30:00Z",
+  "deviceModel": "iPhone15,2",
+  "preferences": {
+    "selectedTheme": "midnight",
+    "customAccentHex": "#38BDF8",
+    "adaptiveAtmosphereEnabled": true,
+    "meshFrameRate": 60,
+    "keepAwakeInLyricsMode": true
+  },
+  "customTrackOffsets": [
+    { "trackURI": "spotify:track:4cOdK2wGLETKBW3PvgPWqT", "offsetMs": -200 }
+  ],
+  "cachedLyrics": [
+    {
+      "trackURI": "spotify:track:...",
+      "granularity": "syllableSynced",
+      "lines": [...]
+    }
+  ]
+}
+Security Boundary: OAuth access_token and refresh_token are never written into the exported JSON file (preventing accidental credential leakage if you back up the file to cloud storage).
+
+Conflict-Free Restore (UPSERT): Importing a .json backup via UIDocumentPickerViewController runs inside a single atomic SQLite transaction (BEGIN IMMEDIATE TRANSACTION ... ON CONFLICT(track_uri) DO UPDATE SET ... COMMIT), merging imported lyrics and custom ±ms offsets without duplicating rows.
+
+19. Performance, 120Hz ProMotion & Battery/Thermal Guardrails (iPhone 14 Pro)
+The iPhone 14 Pro's A16 Bionic and Super Retina XDR ProMotion display scale dynamically between 10Hz and 120Hz. Without strict frame-rate hints and thermal throttling, music visualizers can overheat the device.
+
+Subsystem	Normal Operation (Battery > 20%, Thermal .nominal/.fair)	Eco / Low Power Mode (isLowPowerModeEnabled or Thermal .serious)	Critical Thermal State (.critical) or App Backgrounded
+Lyric Scroll & Syllable Fill (CADisplayLink)	CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120) when a syllable or line transition is actively animating; drops to 10Hz during static long vocal holds.	Clamped to CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60); distance-based Gaussian line blur disabled (blur(radius: 0)).	CADisplayLink.isPaused = true (0 Hz / 0% CPU).
+Adaptive Atmosphere (MeshGradient)	3×3 Metal MeshGradient control points oscillate smoothly at 30–60Hz.	Frozen into a static 3×3 MeshGradient transition (animates for 0.6s only on track change, then holds static at 0% GPU).	Replaced by solid theme base color (#000000 in Obsidian).
+Artwork Palette Extraction (vImage)	Runs once per unique artworkURL on a background .utility task at 64×64px resolution (<1.2ms).	Identical (<1.2ms), cached in SQLite palette_cache.	Deferred until app returns to foreground.
+Spotify State Synchronization	Push-driven via SPTAppRemotePlayerStateDelegate (0 HTTP polls). If using Cloud Connect mode, polls GET /v1/me/player once every 5.0s.	Cloud Connect poll interval extended to 10.0s.	All timers suspended.
+20. Privacy, PKCE & Zero-Secret Repository Security Plan
+Public GitHub Repo Safety (Zero Secrets in Source Code):
+
+To get unlimited free macos-latest Xcode 26 build minutes on GitHub Actions, your repository is public.
+
+Hard Rule: No client_secret, no hardcoded client_id, no .p12 certificates, and no .mobileprovision profiles ever exist in git. Signing happens 100% locally on your iPhone 14 Pro inside SideStore after downloading the unsigned .ipa.
+
+RFC 7636 OAuth 2.0 PKCE Implementation (SpotifyPKCEAuthenticator.swift):
+
+Generates a 64-byte cryptographically random code_verifier using SecRandomCopyBytes.
+
+Computes code_challenge = base64URLEncode(SHA256(ASCII(code_verifier))) using Apple's CryptoKit.
+
+Requests authorization via ASWebAuthenticationSession with linerios://auth-callback and validates the state parameter to prevent CSRF injection.
+
+Hardware Keychain Isolation (KeychainStore.swift):
+
+Stores access_token, refresh_token, token_expiry, and client_id using kSecClassGenericPassword with protection class kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly—meaning tokens are hardware-encrypted by the A16 Secure Enclave and are never included in unencrypted iTunes/Finder backups.
+
+Zero Third-Party Telemetry: The app makes outbound HTTPS connections to only two domains: *.spotify.com (accounts.spotify.com, api.spotify.com, i.scdn.co) and lrclib.net.
+
+21. Automated Testing & Physical iPhone 14 Pro Acceptance Criteria
+Part A: Automated CI Unit Tests (Executed on Every git push in GitHub Actions)
+Test Suite	Target Component	Exact Assertions Verified in CI
+ClockInterpolatorTests	ClockInterpolator.swift	
+1. At R=1.0, advancing monotonic clock by 250.0ms advances t 
+now
+​
+  by exactly 250ms.
+
+
+2. At R=0.0 (paused), t 
+now
+​
+  remains frozen.
+
+
+3. Applying userOffsetMs = -300 shifts t 
+now
+​
+  by -300ms.
+
+
+4. Remote drift <150ms is ignored; drift >150ms slews smoothly over 10 frames.
+
+BraccatoLyricsParserTests	BraccatoLyricsParser.swift	
+1. Parses standard .lrc ([01:12.45] Line text) into LyricLine array.
+
+
+2. Parses Enhanced LRC ([00:15.20] <00:15.20>Word1 <00:15.65>Word2) into LyricWordToken spans with exact syllable progress math.
+
+
+3. Handles malformed timestamps, duplicate timestamps, and [au: Instrumental] tags without crashing.
+
+SQLiteCacheActorTests	SQLiteCacheActor.swift	
+1. Inserts and retrieves LyricsPayload and PaletteHex concurrently across 20 tasks without SQLITE_BUSY locks.
+
+
+2. Updating user_offset_ms persists across simulated database reopen.
+
+
+3. JSON Backup export and UPSERT restore round-trips 100% identically.
+
+Spotify2026SchemaTests	SpotifyWebAPIClient.swift	
+1. Decodes February/March 2026 Development Mode /v1/playlists/{id}/items JSON where tracks is renamed to items and track is renamed to item.
+
+
+2. Gracefully handles omitted popularity and external_ids fields.
+
+Part B: Physical iPhone 14 Pro Acceptance Checklist (Milestone Verification)
+Sideload & Slot Audit: Install LineriOS-unsigned.ipa via SideStore + LocalDevVPN. Confirm total active Bundle IDs = 2 (SideStore + com.personal.linerios), leaving 1 free slot spare.
+
+PKCE Handshake & Persistence: Paste Spotify client_id in S2, complete ASWebAuthenticationSession, force-close LineriOS, relaunch, and verify instant boot directly into S3: HomeView.
+
+Local IPC Latency: Tap Play/Pause and Next Track in S7: NowPlayingView. Verify audio responds in <25ms via SPTAppRemote without hitting Web API rate limits.
+
+120Hz ProMotion Verification: Enable DiagnosticOverlayHUD in S11, open S9: LyricsView on a synced track, and verify frame counter locks at 118–120 FPS during line transitions.
+
+Romanian & Underground Track Fallback: Play a mainstream Romanian track (verify automatic LRCLIB synced match), then play an underground track missing from LRCLIB and verify one-tap .lrc import via iOS Files app (S9).
+
+Airplane Mode Offline Survival: Start a cached song in Spotify, enable Airplane Mode, open LineriOS, and verify local IPC transport controls + cached SQLite synchronized lyrics continue working seamlessly.
+
+22. Provider Fallback & Adapter Replacement Strategy
+Every external dependency sits behind an injectable protocol inside AppEnvironment.swift, executing automatic multi-tier failover at runtime:
+
+Chain 1: Lyrics Resolution (CompositeLyricsRepository)
+[1. Local SQLite Cache (0ms)]
+       │ (Cache Miss)
+       ▼
+[2. LRCLIB Exact Match: GET /api/get?track_name=...&artist_name=...&duration=...]
+       │ (404 Not Found or Duration Mismatch > ±2.0s)
+       ▼
+[3. LRCLIB Fuzzy Search: GET /api/search?q={cleanTitle}+{primaryArtist}]
+   (Normalizes title by stripping "(feat. ...)", "- Remastered 2026", "[Explicit]"
+    and selects result with |duration_delta| <= 2.5s)
+       │ (No Match or LRCLIB Offline/Timeout > 4.0s)
+       ▼
+[4. Secondary Plain-Text Fallback Adapter (Optional Lyrics.ovh / ChartLyrics)]
+       │ (No Match)
+       ▼
+[5. Graceful UI Fallback: "Import .LRC/.TTML from Files" or "Paste Lyrics"]
+Chain 2: Playback Control (HybridPlaybackCoordinator)
+[1. SPTAppRemote Local IPC (Primary — 0 HTTP quota, <15ms latency)]
+       │ (Socket disconnected / Playing on external Spotify Connect device)
+       ▼
+[2. Spotify Web API Player Endpoints (PUT /v1/me/player/play, pause, next)]
+       │ (404 No Active Device Found)
+       ▼
+[3. Automatic Local Wakeup: Opens "spotify:track:{id}" via URL scheme to wake
+    background Spotify audio engine, then re-establishes SPTAppRemote IPC]
+23. Long-Term Maintenance & iOS Update Survival Checklist
+1. Automated Weekly 7-Day Refresh (Zero PC Needed)
+To ensure your free Apple ID signature never expires:
+
+Create a native iOS Personal Automation in the built-in Apple Shortcuts app on your iPhone 14 Pro:
+
+Trigger: Every Day at 03:00 AM (or When iPhone connects to Wi-Fi + Charger).
+
+Actions:
+
+Connect LocalDevVPN (via VPN action).
+
+Wait 3 seconds.
+
+Trigger SideStore "Refresh All Apps" Shortcut action.
+
+Result: Your 7-day certificate resets back to 7 days remaining automatically while your phone charges overnight.
+
+2. Quarterly & iOS Update Maintenance Runbook
+Before updating iOS (e.g., iOS 26.5 → iOS 26.6 / iOS 27):
+
+Check [https://docs.sidestore.io/](https://docs.sidestore.io/) or the SideStore Discord announcement channel to confirm LocalDevVPN and Jit/Anisette compatibility with the new iOS point release.
+
+Export a JSON backup (S11: Settings - Export Full Backup) to iCloud Drive (takes 3 seconds).
+
+Updating the App Code from Windows 11:
+
+Edit Swift files in VS Code on Windows 11 and run git push origin main.
+
+Wait ~3 minutes for GitHub Actions to publish the updated .ipa.
+
+Open SideStore on your iPhone 14 Pro and tap Update—your SQLite cache and Keychain tokens carry over automatically.
+
+24. Unresolved Risks & Practical Engineering Workarounds
+#	Concrete Risk	Likelihood	Impact	Engineered Workaround Built Into This Blueprint
+R1	SideStore Error 1009 / 3013: "You cannot register more than 10 App IDs within a 7-day period".	Medium (if experimenting with extensions)	High (blocks new installs for 7 days)	project.yml builds only 1 target (com.personal.linerios) with zero App Extensions by default. Renewing an existing app uses 0 new App IDs.
+R2	7-Day Certificate Expires while traveling without your Windows 11 laptop.	Low–Medium	Medium	Never delete the expired app. As long as SideStore itself is refreshed—or once you reconnect to iloader on Windows—re-signing over the expired app restores launch access with 100% of your SQLite lyrics and Keychain tokens intact.
+R3	SideStore Error 3021 (Invalid Anisette Data) during refresh.	Low	Low	Switch the Anisette server URL inside SideStore - Settings - Anisette Server (e.g., to Macley or another listed public server) and retry.
+R4	Spotify iOS App Remote SDK (SPTAppRemote) drops IPC after iOS aggressively suspends background apps.	High (Normal iOS behavior)	Low	HybridPlaybackCoordinator automatically routes commands through the Spotify Web API while showing a one-tap "Wake Local Spotify" pill that silently pings spotify: and restores IPC in <0.8s.
+R5	Spotify Web API 429 Too Many Requests during heavy playlist browsing.	Low	Medium	SpotifyWebAPIClient enforces a strict token-bucket limiter (max 2 requests/sec), caches playlist items in SQLite for 7 days, and honors the Retry-After header automatically.
+R6	Track Metadata Mismatch ("- Remastered", "(feat. X)") causes LRCLIB 404 on exact match.	High	Low	CompositeLyricsRepository runs a regex title normalizer stripping feat/remaster suffixes and falls back to GET /api/search filtered by ±2.5s duration tolerance.
+R7	Spotify Owner Account Downgrades from Premium to Free (violating March 2026 Dev Mode rules).	User-dependent	High	S2 & S12 detect the 403 Developer Mode policy response and clearly explain that Spotify's 2026 API rules require an active Premium subscription on the Client ID owner account, while still keeping offline cached lyrics accessible.
+25. Milestone-by-Milestone Implementation Roadmap & Final Verdict
+Milestone Roadmap (Prove the Pipeline First, Then Layer Features)
+[M0: Day 1] ──► [M1: Days 2–4] ──► [M2: Days 5–7] ──► [M3: Days 8–10] ──► [M4: Days 11–14]
+ Pipeline Proof   Spotify Hybrid     120Hz Lyrics &     iOS 26 Liquid      Backup, Polish &
+ (Hello Glass)    (PKCE + IPC)       SQLite Cache       Glass & Shaders    Device Acceptance
+Milestone 0 — Prove the Windows-to-iPhone Pipeline (Day 1 — Mandatory First Step):
+
+Create the public GitHub repository with project.yml, .github/workflows/build-unsigned-ipa.yml, and a minimal 50-line SwiftUI view rendering a single iOS 26 .glassEffect() card on an Obsidian background.
+
+Trigger GitHub Actions, verify LineriOS-unsigned.ipa builds in ~3 minutes, install it on your iPhone 14 Pro via SideStore + LocalDevVPN, and verify 120Hz touch responsiveness.
+
+Milestone 1 — Zero-Secret Spotify PKCE & Hybrid Playback Engine (Days 2–4):
+
+Implement KeychainStore, SpotifyPKCEAuthenticator (ASWebAuthenticationSession), SpotifyWebAPIClient (2026 endpoints), and SpotifyAppRemoteAdapter (SpotifyiOS.xcframework).
+
+Build Screens S1, S2, and the DiagnosticOverlayHUD (S11) so you can inspect all IPC and HTTP traffic directly on your iPhone screen without Xcode.
+
+Milestone 2 — 120Hz Clock Interpolator, LRCLIB & SQLite Cache (Days 5–7):
+
+Implement SQLiteCacheActor, ClockInterpolator (CADisplayLink), BraccatoLyricsParser (LRC + Enhanced LRC/TTML), LRCLIBProvider, and .lrc file import.
+
+Build S9: LyricsView with syllable fill, active-line glow, distance blur, and the ±100ms per-track offset stepper.
+
+Milestone 3 — iOS 26 Liquid Glass UI, Adaptive Atmosphere & Core Screens (Days 8–10):
+
+Implement VImagePaletteExtractor (64×64 LAB k-means + WCAG AA contrast clamping) and AdaptiveAtmosphereMeshView (3×3 MeshGradient).
+
+Build S7: NowPlayingView, S8: LiquidGlassMiniPlayer (with .glassEffectID morphing), S3: HomeView, S4/S5: SearchView, S6: LibraryView, and S10: ThemeCustomizerView.
+
+Milestone 4 — JSON Backup, Thermal Guardrails & Acceptance Testing (Days 11–14):
+
+Implement BackupMigrationService (UIDocumentPickerViewController), thermal/low-power frame-rate throttling, S12 error/offline banners, and configure the automated nightly SideStore refresh Shortcut.
+
+Final Decision & Feature Achievability Summary
+Verdict: Your complete vision for a private, personal-use iPhone 14 Pro music app built from Windows 11 for strictly €0.00 is achievable and architecturally sound.
+
+Major Feature	Final Classification	Summary of How It Works in Phase 2
+€0 Windows 11 → iPhone 14 Pro Build & Sideload	Achievable	VS Code on Windows 11 → GitHub Actions macos-latest (Xcode 26) → Unsigned .ipa → SideStore + LocalDevVPN on iPhone 14 Pro.
+Native iOS 26 Liquid Glass Interface & 4 Themes	Achievable	Public SwiftUI GlassEffectContainer, .glassEffect(), and .glassEffectID() morphing paired with Midnight, Obsidian, Aurora, and Afterhours presets.
+Adaptive Album Atmosphere (60fps Mesh)	Achievable	Local vImage 64×64 LAB palette extractor feeding a 3×3 SwiftUI MeshGradient with automatic thermal/battery throttling.
+120Hz Synchronized Lyrics (Line & Syllable)	Achievable	LRCLIB + SQLite permanent cache + local .lrc/.ttml file import driven by a 120Hz CADisplayLink monotonic clock interpolator.
+Spotify Search, Library & Zero-Latency Control	Achievable with Limitations	Hybrid SPTAppRemote (local IPC) + Web API PKCE (2026 /items & /me/library endpoints). Requires the Spotify account owner to have Spotify Premium and the official Spotify app installed as the background audio engine.
+Native Lock Screen & Control Center Integration	Achievable with Limitations	Handled natively by the background Spotify app (which owns the active AVAudioSession) and synced back into your app on unlock; custom Apple Music-style animated Lock Screen video canvases are Unavailable to third-party apps via public APIs.
+Dynamic Island / Live Activities (ActivityKit)	Achievable with Limitations	Kept as an optional build target so your default build consumes only 1 of your 3 free Apple ID Bundle ID slots.

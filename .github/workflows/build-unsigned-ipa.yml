@@ -1,0 +1,71 @@
+name: Build Unsigned iOS 26 IPA & Update SideStore Source
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Fetch SpotifyiOS.xcframework if Missing
+        run: |
+          if [ ! -d "Vendor/SpotifyiOS.xcframework" ]; then
+            echo "Vendor/SpotifyiOS.xcframework not found in repository. Fetching from spotify/ios-sdk..."
+            mkdir -p Vendor
+            git clone --depth 1 https://github.com/spotify/ios-sdk.git /tmp/spotify-sdk
+            cp -r /tmp/spotify-sdk/SpotifyiOS.xcframework Vendor/
+            rm -rf /tmp/spotify-sdk
+            echo "Successfully installed SpotifyiOS.xcframework into Vendor/"
+          else
+            echo "Vendor/SpotifyiOS.xcframework already present."
+          fi
+
+      - name: Select Xcode 26
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Generate Xcode Project via XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Run Unit Tests (Clock Interpolator, LRC/TTML Parser, SQLite Cache)
+        run: |
+          xcodebuild test \
+            -project LineriOS.xcodeproj \
+            -scheme LineriOS \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Compile Unsigned Release .app for iPhone 14 Pro (arm64)
+        run: |
+          xcodebuild build \
+            -project LineriOS.xcodeproj \
+            -scheme LineriOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: Package Unsigned .ipa Bundle
+        run: |
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/LineriOS.app Payload/
+          zip -r9 LineriOS-unsigned.ipa Payload
+
+      - name: Upload Unsigned .ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LineriOS-unsigned-ipa
+          path: LineriOS-unsigned.ipa
