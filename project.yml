@@ -43,7 +43,7 @@ targets:
       - framework: Vendor/SpotifyiOS.xcframework
         embed: true
         codeSign: false
-      - sdk: sqlite3.tbd
+      - sdk: libsqlite3.tbd
       - sdk: Accelerate.framework
       - sdk: AuthenticationServices.framework
       - sdk: CryptoKit.framework
